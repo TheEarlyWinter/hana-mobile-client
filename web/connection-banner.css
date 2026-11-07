@@ -1,0 +1,118 @@
+/* web/connection-banner.css — E9 断线细条（配 connection-banner.js）
+ *
+ * 形态为什么是「顶部细条」而不是弹窗 / toast：
+ *   - 断线是「背景状态」，不是一次需要用户响应的事件。弹窗会打断正在读的内容，
+ *     toast 又会自己飘走；细条留在原地，用户扫一眼就知道「不是我不动了，是网断了」。
+ *   - position: fixed → 不参与布局，不占高度、不推内容，断开/恢复时聊天区不会跳。
+ *     代价是它浮在顶部 ~26px 上：用 pointer-events: none 保证这一条区域照样能点、
+ *     能滚动，绝不吞掉标题栏按钮的点击。
+ *   - z-index 90：盖在会话/抽屉/搜索/附件预览（1~80）之上，
+ *     但让位给设置面板（150）、工作区全屏（120+）和启动错误盘（999）——
+ *     那些是用户主动打开的前台任务，状态条不该压在上面。
+ *
+ * 两态为什么不对称：
+ *   - 断开用它自己的实色底（--danger-rgb）：这是需要被看见的坏消息，值得强对比；
+ *   - 恢复用纸色底 + 绿点：好消息不该抢注意力，而且它 2 秒后就消失，
+ *     一整条绿底反而更刺眼。
+ * 颜色一律走主题 token（warm-paper 里的 --danger-rgb / --green / --bg-glass / --surface-raised），
+ * 不写死色值，换主题时跟着变。
+ */
+
+.connection-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-6, 6px);
+  box-sizing: border-box;
+  /* 顶部让开刘海/状态栏：细条自己吃 safe-area，不靠 body 留白（留白会改布局高度） */
+  padding: calc(env(safe-area-inset-top, 0px) + var(--space-4, 4px)) var(--space-14, 14px)
+    var(--space-6, 6px);
+  font-family: var(--font-ui);
+  font-size: var(--fs-caption, 0.78rem);
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  text-align: center;
+  /* 只报信，不吃手：这一条上的点击与滑动全部透给下面的界面 */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* 出场只做很轻的下沉+淡入：600ms 防抖已经把瞬断挡掉了，这里不必再拖长 */
+  animation: connection-banner-in var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+/* index.html 的 style.css 已有全局 [hidden]，这里再声明一次：
+   细条是否有自己的样式表都能正确隐藏，不依赖别处的规则顺序。 */
+.connection-banner[hidden] {
+  display: none !important;
+}
+
+.connection-banner-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.connection-banner-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------- 断开：正在重连 ---------------------------- */
+
+.connection-banner.is-down {
+  background: rgba(var(--danger-rgb, 139, 58, 58), 0.94);
+  color: var(--surface-raised, #FFFDF9);
+  box-shadow: 0 1px 10px rgba(var(--danger-rgb, 139, 58, 58), 0.28);
+}
+
+/* 呼吸点：提示「还在试」，不是死机。节奏放到 1.6s，避免变成焦虑源 */
+.connection-banner.is-down .connection-banner-dot {
+  animation: connection-banner-pulse 1.6s ease-in-out infinite;
+}
+
+/* ---------------------------- 恢复：已连上 ---------------------------- */
+
+.connection-banner.is-up {
+  background: var(--bg-glass, rgba(250, 248, 242, 0.94));
+  color: var(--text, #3B3D3F);
+  border-bottom: 1px solid var(--border, rgba(122, 96, 88, 0.18));
+  box-shadow: 0 1px 8px var(--shadow, rgba(59, 61, 63, 0.09));
+}
+
+.connection-banner.is-up .connection-banner-dot {
+  background: var(--green, #7BAE7F);
+  opacity: 1;
+}
+
+/* ---------------------------- 动效 ---------------------------- */
+
+@keyframes connection-banner-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes connection-banner-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+/* 系统开了「减少动效」：细条还在，只是不呼吸、不上滑 */
+@media (prefers-reduced-motion: reduce) {
+  .connection-banner {
+    animation: none;
+  }
+  .connection-banner.is-down .connection-banner-dot {
+    animation: none;
+    opacity: 1;
+  }
+}

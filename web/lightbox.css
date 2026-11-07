@@ -1,0 +1,217 @@
+/* web/lightbox.css — 图片全屏查看（E12）
+ *
+ * 只加 lightbox- 前缀的命名空间，不碰 style.css 里旧的 #lightbox / .lightbox
+ * （那个是另一条链路，主代理接线后可以整体下线，这里也不覆盖它的任何声明）。
+ *
+ * 结构（由 web/lightbox.js 生成，改类名前先改那边）：
+ *   .lightbox-root            全屏遮罩，接收所有手势（touch-action: none）
+ *     .lightbox-stage         舞台：下拉关闭时整体下移并淡出，暗层留在原位
+ *       .lightbox-track       flex 横排，translate3d 按张数翻页
+ *         .lightbox-page      每张图一屏
+ *           .lightbox-img     图片本体，缩放/平移的 transform 打在它身上
+ *     .lightbox-nav           左右箭头（.lightbox-prev / .lightbox-next）
+ *     .lightbox-bar           顶栏：计数 + 关闭
+ *
+ * 层级：压在聊天与工作区（≤150）之上，低于 toast（9998）与确认弹窗（9999）。
+ */
+
+.lightbox-root {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  overflow: hidden;
+  background: rgba(16, 15, 14, 0.96);
+  color: #fff;
+  font-family: var(--font-ui, sans-serif);
+  /* 手势全归自己处理：不滚页面、不触发浏览器自身的缩放/返回手势 */
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  will-change: transform, opacity;
+}
+
+.lightbox-track {
+  display: flex;
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.lightbox-page {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--space-16, 16px) + env(safe-area-inset-top, 0px))
+           var(--space-16, 16px)
+           calc(var(--space-16, 16px) + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+}
+
+.lightbox-img {
+  /* auto 宽高让元素本身就是「显示出来的图」：平移夹边按这个尺寸算，
+     不会把 object-fit 产生的黑边也拖进视野。 */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-xs, 4px);
+  transform-origin: center center;
+  will-change: transform;
+  transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 跟手过程中不能有过渡，否则手指和图片会「追不上」 */
+.lightbox-root.is-dragging .lightbox-img,
+.lightbox-root.is-dragging .lightbox-track {
+  transition: none;
+}
+
+/* ---------------- 箭头 ---------------- */
+
+.lightbox-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 按钮自带 display，必须显式压掉 [hidden]，否则单图时箭头还露着 */
+.lightbox-btn[hidden] {
+  display: none !important;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  margin-top: -22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 24px;
+  line-height: 1;
+  transition: background var(--duration-fast, 0.15s) var(--ease-out, ease-out),
+              opacity var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.lightbox-nav:active {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.lightbox-nav:disabled {
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.lightbox-prev {
+  left: calc(var(--space-8, 8px) + env(safe-area-inset-left, 0px));
+}
+
+.lightbox-next {
+  right: calc(var(--space-8, 8px) + env(safe-area-inset-right, 0px));
+}
+
+/* ---------------- 顶栏：计数 + 关闭 ---------------- */
+
+.lightbox-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8, 8px);
+  padding: max(env(safe-area-inset-top, 0px), var(--space-10, 10px))
+           calc(var(--space-10, 10px) + env(safe-area-inset-right, 0px))
+           var(--space-10, 10px)
+           calc(var(--space-10, 10px) + env(safe-area-inset-left, 0px));
+  /* 顶栏不挡手势：只有里面的按钮/计数自己吃事件 */
+  pointer-events: none;
+}
+
+.lightbox-bar > * {
+  pointer-events: auto;
+}
+
+.lightbox-counter {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  font-size: var(--fs-caption, 0.78rem);
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.86);
+  /* 计数只是读数，不该被选中或吃掉点按 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 单图时没得翻，计数也没意义 */
+.lightbox-root.is-single .lightbox-counter {
+  visibility: hidden;
+}
+
+.lightbox-close {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  font-size: 22px;
+  line-height: 1;
+  transition: background var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.lightbox-close:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* 横屏矮屏：箭头略收，别压到图上 */
+@media (max-height: 420px) {
+  .lightbox-nav {
+    width: 38px;
+    height: 38px;
+    margin-top: -19px;
+  }
+}
+
+/* 系统开了「减少动态效果」：翻页/回位直接到位 */
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-img,
+  .lightbox-track,
+  .lightbox-nav,
+  .lightbox-close {
+    transition: none !important;
+  }
+}

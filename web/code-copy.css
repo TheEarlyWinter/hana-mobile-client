@@ -1,0 +1,75 @@
+/* web/code-copy.css — 代码块一键复制按钮（E11）
+ *
+ * 只加两个命名空间，不改 style.css 里 .md-code / .code-lang 原有声明：
+ *   .code-copy-btn            按钮本体（JS 用 class 找它，改名前先改 web/code-copy.js）
+ *   .md-code.has-code-copy    打过复制按钮的块（sync() 时加上），用来让出顶部留白带
+ *
+ * 几何：按钮 64×22，top 6 / right 8，占满块顶部 6–28px 这一条；
+ * .code-lang 原本也在右上角（top 6 / right 10），会和按钮叠在一起，
+ * 所以这里把它左移到 right 80（按钮左沿 72 + 8px 间隙），并给 22px 行高与按钮对齐；
+ * 同时把 .md-code pre 的 padding-top 从 8 抬到 32（按钮下沿 28 + 4px 间隙），
+ * 代码正文永远从按钮下方开始 —— 窄屏、长行横向滚动都不会被按钮压住。
+ */
+
+.md-code.has-code-copy pre {
+  padding-top: 32px;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: var(--space-8, 8px);
+  width: 64px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--text-muted, #6B6F73);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    color var(--duration-fast, 0.15s) var(--ease-out, ease-out),
+    border-color var(--duration-fast, 0.15s) var(--ease-out, ease-out),
+    opacity var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.code-copy-btn:active {
+  opacity: 0.65;
+}
+
+.code-copy-btn[data-state="done"] {
+  color: var(--accent, #537D96);
+  border-color: currentColor;
+}
+
+.code-copy-btn[data-state="fail"] {
+  color: var(--danger, #8B3A3A);
+  border-color: currentColor;
+}
+
+/* 语言标让位：与按钮同一条带、同高，左边留 8px 间隙。 */
+.md-code.has-code-copy .code-lang {
+  top: 6px;
+  right: 80px;
+  line-height: 22px;
+}
+
+/* 极窄屏：按钮和语言标仍各占一边，但把语言标的字号再收一点，
+   避免长语言名（typescript、objective-c）在 320px 屏上横跨半屏。 */
+@media (max-width: 360px) {
+  .md-code.has-code-copy .code-lang {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+}

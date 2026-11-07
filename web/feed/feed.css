@@ -1,0 +1,668 @@
+/* 手机日报：全部类名以 feed- 开头，颜色/间距只用现有主题 token。
+ * 面板沿用 home/list 的纸面与顶栏高度，卡片 iframe 由 cards.js 写入高度。 */
+
+.feed-view {
+  position: fixed;
+  inset: 0;
+  bottom: var(--kb, 0px);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg, #F8F4ED);
+  color: var(--text, #3B3D3F);
+}
+
+.feed-view[hidden] {
+  display: none !important;
+}
+
+.feed-head {
+  flex: 0 0 auto;
+  height: calc(var(--head-h, 52px) + var(--safe-top, 0px));
+  padding: var(--safe-top, 0px) var(--space-12) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  background: var(--bg-glass, rgba(250, 248, 242, 0.92));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.feed-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--hana-text, #2B3A4E);
+}
+
+.feed-back,
+.feed-refresh {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-light, #6B6F73);
+  min-width: 44px;
+  min-height: 44px;
+  height: 44px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+}
+
+.feed-back:active,
+.feed-refresh:active {
+  background: var(--overlay-light, rgba(0, 0, 0, 0.05));
+}
+
+.feed-badge {
+  flex: 0 0 auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--space-6);
+  border-radius: 10px;
+  background: var(--accent, #537D96);
+  color: #FFFDF9;
+  font-size: var(--fs-hint);
+  line-height: 20px;
+  text-align: center;
+}
+
+.feed-lanes {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-16);
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.1));
+}
+
+.feed-lane {
+  border: 0;
+  background: transparent;
+  padding: var(--space-4) 0;
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-ui);
+  border-bottom: 2px solid transparent;
+}
+
+.feed-lane.is-active {
+  color: var(--accent, #537D96);
+  border-bottom-color: var(--accent, #537D96);
+}
+
+.feed-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-12) var(--space-16) var(--space-16);
+}
+
+.feed-state {
+  padding: var(--space-24) var(--space-8);
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-ui);
+  text-align: center;
+}
+
+.feed-error {
+  margin-bottom: var(--space-12);
+  padding: var(--space-12);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  border-radius: var(--radius-md);
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--danger, #8B3A3A);
+  text-align: left;
+}
+
+.feed-error .feed-state-text {
+  margin: 0 0 var(--space-8);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.feed-retry {
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent, #537D96);
+  padding: var(--space-4) var(--space-10);
+  font-size: var(--fs-caption);
+}
+
+.feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.feed-item {
+  padding: var(--space-12);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  border-radius: var(--radius-md);
+  background: var(--surface-raised, #FFFDF9);
+  box-shadow: 0 2px 10px var(--shadow, rgba(59, 61, 63, 0.09));
+}
+
+.feed-item.is-pending {
+  opacity: 0.72;
+}
+
+.feed-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-6) var(--space-8);
+}
+
+.feed-item-title {
+  flex: 1 1 100%;
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--fs-title);
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--text, #3B3D3F);
+  overflow-wrap: anywhere;
+}
+
+/* 标题本身就是“阅读全文”的可访问按钮：保留排版，但至少 44px 可点。 */
+.feed-item-title-btn {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.feed-item-title-btn:active {
+  opacity: 0.72;
+}
+
+.feed-item-title-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.feed-item-meta {
+  flex: 1 1 auto;
+  color: var(--text-muted, #6B6F73);
+  font-size: var(--fs-hint);
+}
+
+.feed-item-unread {
+  flex: 0 0 auto;
+  color: var(--accent, #537D96);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+}
+
+.feed-item-explain {
+  margin: var(--space-8) 0 0;
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.feed-item-topics {
+  margin-top: var(--space-6);
+  color: var(--accent, #537D96);
+  font-size: var(--fs-hint);
+}
+
+.feed-card-slot {
+  margin-top: var(--space-10);
+}
+
+.feed-card {
+  min-height: var(--space-6);
+}
+
+.feed-card-body {
+  display: block;
+}
+
+.feed-card-loading {
+  padding: var(--space-16) 0;
+  color: var(--text-muted, #6B6F73);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+
+.feed-card-error {
+  padding: var(--space-12);
+  border: 1px dashed var(--border-soft, rgba(122, 96, 88, 0.2));
+  border-radius: var(--radius-sm);
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.feed-card-note {
+  padding: var(--space-8) 0;
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.feed-notice {
+  margin-bottom: var(--space-10);
+  padding: var(--space-8) var(--space-10);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.feed-card-retry {
+  display: block;
+  margin-top: var(--space-8);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent, #537D96);
+  padding: var(--space-4) var(--space-10);
+  font-size: var(--fs-caption);
+}
+
+.feed-card-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.feed-item-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6) var(--space-8);
+  margin-top: var(--space-10);
+  padding-top: var(--space-10);
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.1));
+}
+
+.feed-task-state {
+  color: var(--text-muted, #6B6F73);
+  font-size: var(--fs-hint);
+}
+
+.feed-task-action,
+.feed-favorite,
+.feed-hide,
+.feed-less-like,
+.feed-explain,
+.feed-read,
+.feed-ask-open {
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-light, #6B6F73);
+  padding: var(--space-4) var(--space-10);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  min-height: 36px;
+}
+
+.feed-read {
+  border-color: var(--accent, #537D96);
+  color: var(--accent, #537D96);
+  /* 列表里唯一的正文入口：保证 44px 触控。 */
+  min-height: 44px;
+  padding: 0 var(--space-12);
+}
+
+.feed-task-action:not(:disabled):active,
+.feed-favorite:not(:disabled):active,
+.feed-hide:not(:disabled):active,
+.feed-less-like:not(:disabled):active,
+.feed-explain:not(:disabled):active,
+.feed-read:not(:disabled):active,
+.feed-ask-open:not(:disabled):active {
+  background: var(--overlay-light, rgba(0, 0, 0, 0.05));
+}
+
+.feed-task-action:disabled,
+.feed-favorite:disabled,
+.feed-hide:disabled,
+.feed-less-like:disabled,
+.feed-explain:disabled,
+.feed-read:disabled,
+.feed-ask-open:disabled {
+  opacity: 0.45;
+}
+
+.feed-favorite.is-on {
+  border-color: var(--accent, #537D96);
+  color: var(--accent, #537D96);
+}
+
+.feed-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin-top: var(--space-10);
+}
+
+.feed-question {
+  margin-top: var(--space-10);
+  padding-top: var(--space-10);
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.1));
+}
+
+.feed-question-input {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  box-sizing: border-box;
+  padding: var(--space-8) var(--space-10);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: var(--bg, #F8F4ED);
+  color: var(--text, #3B3D3F);
+  font: inherit;
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+}
+
+.feed-question-input:focus {
+  outline: none;
+  border-color: var(--accent, #537D96);
+}
+
+.feed-question-error {
+  margin-top: var(--space-6);
+  color: var(--danger, #8B3A3A);
+  font-size: var(--fs-hint);
+}
+
+.feed-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  margin-top: var(--space-8);
+}
+
+.feed-question-cancel,
+.feed-question-send {
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-light, #6B6F73);
+  padding: var(--space-6) var(--space-12);
+  font-size: var(--fs-caption);
+}
+
+.feed-question-send {
+  border-color: var(--accent, #537D96);
+  background: var(--accent, #537D96);
+  color: #FFFDF9;
+}
+
+.feed-question-send:disabled {
+  opacity: 0.55;
+}
+
+.feed-foot {
+  flex: 0 0 auto;
+  padding: var(--space-8) var(--space-16) calc(var(--space-10) + var(--safe-bottom, 0px));
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.1));
+}
+
+.feed-more {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--text-light, #6B6F73);
+  padding: var(--space-8);
+  font-size: var(--fs-ui);
+}
+
+.feed-more:disabled {
+  opacity: 0.55;
+}
+
+/* 全屏阅读层：叠在列表之上，列表 DOM 与滚动位置都不动。 */
+.feed-reader {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg, #F8F4ED);
+  color: var(--text, #3B3D3F);
+}
+
+.feed-reader[hidden] {
+  display: none !important;
+}
+
+.feed-reader-head {
+  flex: 0 0 auto;
+  height: calc(var(--head-h, 52px) + var(--safe-top, 0px));
+  padding: var(--safe-top, 0px) var(--space-12) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  background: var(--bg-glass, rgba(250, 248, 242, 0.92));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.feed-reader-back {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  height: 44px;
+  padding: 0 var(--space-8);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-light, #6B6F73);
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+}
+
+.feed-reader-back:active {
+  background: var(--overlay-light, rgba(0, 0, 0, 0.05));
+}
+
+.feed-reader-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--hana-text, #2B3A4E);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阅读区：iframe 用 100% 高度链拿这里的可用高度，长正文在 iframe 内滚动。
+ * 不写像素、不监听 resize：旋转或改窗口时浏览器自己重算。 */
+.feed-reader-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.feed-reader-body .feed-card {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+
+.feed-reader-body .feed-card-body {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+
+.feed-reader-body .feed-card-frame {
+  height: 100%;
+}
+
+.feed-reader-error {
+  padding: var(--space-16);
+  color: var(--danger, #8B3A3A);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.feed-reader-foot {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16) calc(var(--space-10) + var(--safe-bottom, 0px));
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.1));
+  background: var(--bg-glass, rgba(250, 248, 242, 0.92));
+}
+
+.feed-reader-ask {
+  min-height: 44px;
+  padding: var(--space-6) var(--space-16);
+  border: 1px solid var(--accent, #537D96);
+  border-radius: var(--radius-sm);
+  background: var(--accent, #537D96);
+  color: #FFFDF9;
+  font-size: var(--fs-ui);
+}
+
+@media (min-width: 700px) {
+  .feed-body {
+    width: min(100%, var(--reading-col, 760px));
+    margin: 0 auto;
+  }
+}
+
+/* 首页入口：报纸放在 composer 背后，只在输入岛左上沿露出可点击部分。 */
+.feed-composer-dock {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  flex: 0 0 auto;
+  isolation: isolate;
+  /* 纸张也是流式内容：dock 内部给它留出高度，纸张高端落在 dock 盒内，
+     不再盖到上方滑轨的记忆提示。实测该 48px 留白同时把 composer 推下 24px、
+     提示上提 24px，纸张与提示留约 5px，露出区仍有 ~52px。 */
+  padding-top: 48px;
+}
+
+.feed-composer-surface {
+  position: relative;
+  z-index: 1;
+}
+
+.feed-entry {
+  position: absolute;
+  top: 8px;
+  left: 34px;
+  z-index: 0;
+  box-sizing: border-box;
+  width: 112px;
+  min-width: 44px;
+  height: 64px;
+  min-height: 44px;
+  padding: 0;
+  display: block;
+  overflow: visible;
+  border: 1px solid #D8D7D3;
+  border-radius: 7px 11px 5px 6px;
+  background: #FFF;
+  box-shadow: 0 2px 5px rgba(36, 36, 36, 0.14);
+  color: #28292A;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transform: rotate(-7deg);
+  transition: none;
+}
+
+.feed-entry:active {
+  background: #FFF;
+  transform: rotate(-7deg) scale(0.98);
+}
+
+.feed-entry:focus-visible {
+  outline: 2px solid var(--accent, #537D96);
+  outline-offset: 2px;
+}
+
+.feed-entry-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  color: #292A2B;
+  font-family: var(--font-serif, serif);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.feed-entry-badge {
+  position: absolute;
+  top: 5px;
+  left: 36px;
+  z-index: 2;
+  min-width: 14px;
+  width: max-content;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #252627;
+  color: #FFF;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.feed-entry-badge[hidden] {
+  display: none;
+}
+
+.feed-entry-window {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  bottom: 5px;
+  width: 37px;
+  overflow: hidden;
+  border-radius: 2px 6px 3px 2px;
+  background: #191A1B;
+  clip-path: polygon(10% 0, 100% 0, 100% 100%, 0 100%);
+}
+
+.feed-entry-window::after {
+  position: absolute;
+  right: 4px;
+  bottom: 6px;
+  left: 7px;
+  height: 16px;
+  background: repeating-linear-gradient(to bottom, rgba(216, 218, 218, 0.72) 0 1px, transparent 1px 5px);
+  content: '';
+}

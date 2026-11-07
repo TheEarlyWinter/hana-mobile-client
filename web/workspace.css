@@ -1,0 +1,294 @@
+/* web/workspace.css
+ *
+ * 工作区文件抽屉与只读安全预览样式。
+ * 遵循暖纸（warm-paper）视觉语言，全部使用 workspace-* 命名空间隔离，不侵入现有全局样式。
+ */
+
+:root {
+  --workspace-safe-top: max(env(safe-area-inset-top, 0px), 30px);
+}
+
+/* 抽屉半透明背景遮罩 */
+.workspace-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(40, 32, 28, 0.38);
+  backdrop-filter: blur(2px);
+  z-index: 120;
+  transition: opacity 0.24s ease;
+}
+
+.workspace-mask[hidden] {
+  display: none;
+}
+
+/* 工作区半屏/侧滑抽屉面板 */
+.workspace-drawer {
+  position: fixed;
+  top: var(--workspace-safe-top);
+  right: 0;
+  bottom: 0;
+  width: min(520px, 92vw);
+  background: var(--surface-raised, #FFFDF9);
+  box-shadow: -8px 0 28px rgba(50, 40, 30, 0.12);
+  border-left: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  z-index: 125;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transform: translateX(0);
+  transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.workspace-drawer[aria-hidden="true"],
+.workspace-drawer[hidden] {
+  transform: translateX(100%);
+  display: none;
+}
+
+/* 抽屉头部 */
+.workspace-head {
+  padding: 16px 18px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.1));
+}
+
+.workspace-title-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspace-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-main, #24201D);
+}
+
+.workspace-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-sub, #7A6058);
+}
+
+.workspace-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-icon-btn {
+  background: none;
+  border: none;
+  padding: 6px;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-sub, #7A6058);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-icon-btn:active {
+  background: var(--overlay-light, rgba(0, 0, 0, 0.05));
+}
+
+/* 面包屑与快捷动作栏 */
+.workspace-toolbar {
+  padding: 10px 18px;
+  background: var(--bg, #F8F4ED);
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.08));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.workspace-crumb-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  color: var(--text-sub, #7A6058);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.workspace-crumb-btn.active {
+  font-weight: 600;
+  color: var(--text-main, #24201D);
+}
+
+.workspace-upload-btn {
+  background: var(--surface-raised, #FFFDF9);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.2));
+  padding: 4px 10px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.78rem;
+  color: var(--text-main, #24201D);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workspace-upload-btn:active {
+  background: var(--overlay-light, rgba(0, 0, 0, 0.05));
+}
+
+/* 列表滚动内容区 */
+.workspace-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.workspace-empty,
+.workspace-loading,
+.workspace-error {
+  padding: 40px 16px;
+  text-align: center;
+  font-size: 0.86rem;
+  color: var(--text-sub, #7A6058);
+}
+
+.workspace-error {
+  color: #B23B2A;
+}
+
+/* 文件行条目 */
+.workspace-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  gap: 12px;
+  user-select: none;
+  transition: background 0.14s ease;
+}
+
+.workspace-item:active {
+  background: var(--overlay-light, rgba(0, 0, 0, 0.04));
+}
+
+.workspace-item-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-sub, #7A6058);
+  flex-shrink: 0;
+}
+
+.workspace-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspace-item-name {
+  font-size: 0.88rem;
+  color: var(--text-main, #24201D);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-item-meta {
+  font-size: 0.72rem;
+  color: var(--text-hint, rgba(122, 96, 88, 0.65));
+}
+
+.workspace-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-download-link {
+  color: var(--text-sub, #7A6058);
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+}
+
+/* 预览模态弹窗 */
+.workspace-preview-modal {
+  position: fixed;
+  inset: var(--workspace-safe-top) 0 0;
+  background: rgba(30, 25, 20, 0.45);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-preview-modal[hidden] {
+  display: none;
+}
+
+.workspace-preview-head {
+  padding: 14px 20px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #FFFDF9;
+}
+
+.workspace-preview-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.workspace-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.workspace-preview-text {
+  width: 100%;
+  max-height: 100%;
+  background: #FFFDF9;
+  color: #24201D;
+  padding: 16px;
+  border-radius: 8px;
+  font-family: ui-monospace, 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+}
+
+.workspace-preview-unsupported {
+  text-align: center;
+  color: #FFFDF9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}

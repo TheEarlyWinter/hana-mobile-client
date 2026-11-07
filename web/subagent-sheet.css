@@ -1,0 +1,595 @@
+/* web/subagent-sheet.css — 子代理详情 sheet（底部弹出，占屏幕 3/4）
+ *
+ * 结构由 web/subagent-sheet.js 生成，改类名前先改那边（契约 2.3）：
+ *   .subagent-sheet[data-state="closed|open|closing"]   固定层，收所有手势
+ *     .ss-backdrop      遮罩，点一下关闭
+ *     .ss-panel         面板：75dvh、顶部 18px 圆角、底部贴边
+ *       .ss-grab        拖拽条（和 .ss-head 一起接管下拉）
+ *       .ss-head        头像 + 名字 / 角色·模型 + 状态 + 关闭
+ *         .ss-avatar    首字圆底；有头像地址时里面换成 .ss-avatar-img
+ *         .ss-id > .ss-name + .ss-role
+ *         .ss-status[data-status]  状态文字 + 前面一粒点
+ *         .ss-close
+ *       .ss-stats > .ss-stat > b + small   用时 / 步骤 / 工具
+ *       .ss-task > em + p                   「它被要求」
+ *       .ss-flow                          唯一滚动容器：步骤 / 骨架 / 空态 / 错误态四选一
+ *
+ * 视觉是暖纸 + 辉蓝，iOS 只借结构：3/4 高度、顶部圆角、拖拽条、遮罩压暗、下滑关闭。
+ * 颜色只走主题 token 并带兜底值，尺寸走 --space-* / --radius-*，字号按契约 4 节。
+ *
+ * 层级：高于工作区抽屉（150）、目录选择器（280）与灯箱（300），低于 toast（9998）。
+ */
+
+.subagent-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  color: var(--text, #3B3D3F);
+  font-family: var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif);
+  /* 面板与正文各自滚，别把滚动接力给背后的页面 */
+  overscroll-behavior: contain;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------------- 遮罩 ---------------- */
+
+.ss-backdrop {
+  position: absolute;
+  inset: 0;
+  /* 压暗走 token：浅色是 28% 墨色；深色下墨色压深底等于没压暗，由 dark.css 另给值 */
+  background: var(--overlay-scrim, rgba(59, 61, 63, 0.28));
+  opacity: 0;
+  transition: opacity 0.28s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+  touch-action: manipulation;
+}
+
+.subagent-sheet[data-state="open"] .ss-backdrop { opacity: 1; }
+.subagent-sheet[data-state="closing"] .ss-backdrop { opacity: 0; }
+
+/* ---------------- 面板 ---------------- */
+
+.ss-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 75vh;
+  height: 75dvh;
+  max-height: calc(100vh - 44px);
+  max-height: calc(100dvh - 44px);
+  overflow: hidden;
+  /* 只有朝上的两个角是圆的：底部贴边，圆角会露出后面的页面 */
+  border-radius: 18px 18px 0 0;
+  background: var(--surface-raised, #FFFDF9);
+  box-shadow: 0 -8px 28px rgba(59, 61, 63, 0.09);
+  transform: translateY(100%);
+  transition: transform 0.28s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+  will-change: transform;
+}
+
+.subagent-sheet[data-state="open"] .ss-panel { transform: translateY(0); }
+.subagent-sheet[data-state="closing"] .ss-panel { transform: translateY(100%); }
+
+/* 跟手拖动时不能有过渡，否则面板追不上手指；松手时由 JS 撤掉这个类恢复过渡 */
+.ss-panel.is-dragging {
+  transition: none;
+}
+
+/* ---------------- 拖拽条 ---------------- */
+
+.ss-grab {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 4px;
+  margin: var(--space-8, 8px) auto 0;
+  border-radius: 999px;
+  background: var(--overlay-strong, rgba(0, 0, 0, 0.15));
+  /* 纵向手势归 sheet：不触发浏览器的滚动 / 下拉刷新 */
+  touch-action: none;
+  cursor: grab;
+}
+
+/* ---------------- 头部：身份 + 状态 + 关闭 ---------------- */
+
+.ss-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-10, 10px);
+  padding: var(--space-10, 10px) var(--space-16, 16px) var(--space-12, 12px);
+  touch-action: none;
+  cursor: grab;
+}
+
+.ss-avatar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: rgba(83, 125, 150, 0.12);
+  color: var(--accent, #537D96);
+  font-family: var(--font-serif, Georgia, serif);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ss-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.ss-id {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 2px);
+  min-width: 0;
+}
+
+.ss-name {
+  overflow: hidden;
+  color: var(--text, #3B3D3F);
+  font-family: var(--font-serif, Georgia, serif);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-role {
+  overflow: hidden;
+  color: var(--text-light, #6B6F73);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-role[hidden] { display: none !important; }
+
+/* 状态：文案 + 前面一粒点。颜色按契约 2.6 的表，失败态文字比点深一档 */
+.ss-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6, 6px);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ss-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ss-status[data-status="running"] { color: var(--accent, #537D96); }
+.ss-status[data-status="running"]::before {
+  animation: ss-breathe 1.8s var(--ease-out, ease-out) infinite;
+}
+
+.ss-status[data-status="done"] { color: var(--green, #7BAE7F); }
+
+.ss-status[data-status="failed"] { color: #C06866; }
+.ss-status[data-status="failed"]::before { background: var(--coral, #EC8F8D); }
+
+.ss-status[data-status="canceled"] { color: var(--text-light, #6B6F73); }
+.ss-status[data-status="canceled"]::before { opacity: 0.5; }
+
+/* 未开始：空心点 */
+.ss-status[data-status="idle"] { color: var(--text-light, #6B6F73); }
+.ss-status[data-status="idle"]::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+@keyframes ss-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.72); }
+}
+
+.ss-close {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-light, #6B6F73);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ss-close:active { background: var(--overlay-light, rgba(0, 0, 0, 0.05)); }
+
+/* ---------------- 三格统计 ---------------- */
+
+.ss-stats {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-8, 8px);
+  margin: 0 var(--space-16, 16px);
+  padding: var(--space-10, 10px) 0;
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.ss-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 2px);
+  min-width: 0;
+}
+
+.ss-stat b {
+  overflow: hidden;
+  color: var(--text, #3B3D3F);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-stat small {
+  color: var(--text-light, #6B6F73);
+  font-size: 9.5px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+}
+
+/* ----------------「它被要求」 ---------------- */
+
+.ss-task {
+  /* 任务原文可长可短：不限高的话它会把下面的时间轴挤成 0 高（面板 overflow:hidden，
+     整页看上去就是「划不动」）。给一个上限，超出部分自己滚。 */
+  flex: 0 1 auto;
+  max-height: 28vh;
+  overflow-y: auto;
+  /* 滚到自己的头 / 尾就把手势交回 .ss-flow：contain 会把这一下吞掉，
+     手指停在任务块上就成了新的「划不动」（这块最高能占面板三分之一）。 */
+  overscroll-behavior-y: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: var(--space-12, 12px) var(--space-16, 16px) 0;
+  padding: var(--space-8, 8px) var(--space-10, 10px);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--accent-light, rgba(83, 125, 150, 0.08));
+}
+
+.ss-task[hidden] { display: none !important; }
+
+.ss-task em {
+  display: block;
+  margin-bottom: var(--space-2, 2px);
+  color: var(--accent, #537D96);
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+}
+
+.ss-task p {
+  margin: 0;
+  color: var(--text, #3B3D3F);
+  font-size: 12.8px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------- 正文：唯一滚动容器 ---------------- */
+
+.ss-flow {
+  flex: 1 1 auto;
+  /* 地板 22vh：面板再挤也要留出一块能滚的区（上面塞了长任务原文也不怕）。
+     它同时是 flex 的下限，内容超高时靠 overflow-y:auto 自己滚，不会反撑面板；
+     内容不满时 flex 本来就会把剩余高度给它，不存在「白抹 22vh」的问题。 */
+  min-height: 22vh;
+  padding: var(--space-10, 10px) var(--space-16, 16px)
+           calc(var(--space-24, 24px) + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---------------- 时间轴 ---------------- */
+
+.ss-step {
+  display: flex;
+  gap: var(--space-10, 10px);
+  padding: var(--space-8, 8px) 0;
+}
+
+.ss-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--accent, #537D96);
+}
+
+/* 步骤点：think 空心蓝 / tool 实心蓝 / say 实心绿 / ask 实心浅灰 / note 珊瑚 */
+.ss-step[data-kind="think"] .ss-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent, #537D96);
+}
+
+.ss-step[data-kind="tool"] .ss-dot { background: var(--accent, #537D96); }
+.ss-step[data-kind="say"] .ss-dot { background: var(--green, #7BAE7F); }
+
+.ss-step[data-kind="ask"] .ss-dot {
+  background: var(--text-light, #6B6F73);
+  opacity: 0.4;
+}
+
+.ss-step[data-kind="note"] .ss-dot { background: var(--coral, #EC8F8D); }
+
+/* 失败一律珊瑚，压掉种类色与空心/浅灰的弱化 */
+.ss-step[data-status="failed"] .ss-dot {
+  background: var(--coral, #EC8F8D);
+  box-shadow: none;
+  opacity: 1;
+}
+
+/* 还在跑的那一步和运行中的状态一样呼吸，免得和已完成的步骤长得一样 */
+.ss-step[data-status="running"] .ss-dot {
+  animation: ss-breathe 1.8s var(--ease-out, ease-out) infinite;
+}
+
+.ss-step-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ss-step-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-6, 6px);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.ss-step-title b {
+  flex: 0 0 auto;
+  color: var(--text, #3B3D3F);
+  font-weight: 600;
+}
+
+.ss-step-title span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-light, #6B6F73);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-step-text {
+  margin-top: var(--space-2, 2px);
+  color: var(--text, #3B3D3F);
+  font-size: 12.8px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ss-step-text[hidden] { display: none !important; }
+
+/* 思考是过程，不是结论：颜色弱一档，把地方留给后面的结论与工具。
+   限高只在沉静视图里做（见下）：经典视图与聊天一致给全文，不截也不假装能点。 */
+.ss-step[data-kind="think"] .ss-step-text {
+  color: var(--text-light, #6B6F73);
+}
+
+/* 沉静视图的过程行：照聊天里那条摘要行的样子（三角 + 一行计数），点一下展开。
+   一律带 [data-view="serene"] 前缀做双保险：视图在位切换时即便残留了节点，
+   也不会在经典视图里继续生效。 */
+.subagent-sheet[data-view="serene"] .ss-fold-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6, 6px);
+  width: 100%;
+  margin: 0 0 var(--space-10, 10px);
+  padding: var(--space-4, 4px) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-light, #6B6F73);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.subagent-sheet[data-view="serene"] .ss-fold-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform var(--duration-fast, 120ms) var(--ease-out, ease);
+  transform: rotate(0deg);
+}
+
+.subagent-sheet[data-view="serene"] .ss-fold-toggle[data-expanded='1'] .ss-fold-caret { transform: rotate(90deg); }
+
+.subagent-sheet[data-view="serene"] .ss-fold-text { flex: 1 1 auto; }
+
+.subagent-sheet[data-view="serene"] .ss-flow.is-folded .ss-step:not([data-kind="say"]):not([data-kind="ask"]) {
+  display: none;
+}
+
+.subagent-sheet[data-view="serene"] .ss-flow.is-folded .ss-step[data-kind="say"],
+.subagent-sheet[data-view="serene"] .ss-flow.is-folded .ss-step[data-kind="ask"] {
+  margin-top: var(--space-6, 6px);
+}
+
+/* 沉静视图：思考默认只留一行，整行可点开铺全文（看到一半想细看也不丢） */
+.subagent-sheet[data-view="serene"] .ss-step[data-kind="think"] .ss-step-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.subagent-sheet[data-view="serene"] .ss-step[data-kind="think"] {
+  cursor: pointer;
+}
+.subagent-sheet[data-view="serene"] .ss-step.is-expanded .ss-step-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+/* 结论走 markdown 渲染：块间距收紧，行内代码跟聊天的观感对齐 */
+.ss-step-text p { margin: 0 0 var(--space-6, 6px); }
+.ss-step-text p:last-child { margin-bottom: 0; }
+.ss-step-text code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(59, 61, 63, 0.05);
+}
+.ss-step-text ul,
+.ss-step-text ol { margin: var(--space-4, 4px) 0; padding-left: var(--space-16, 16px); }
+.ss-step-text li { margin-bottom: 2px; }
+
+/* ---------------- 骨架 / 空态 / 错误态 ---------------- */
+
+.ss-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10, 10px);
+  padding: var(--space-8, 8px) 0;
+}
+
+.ss-skeleton-row {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(59, 61, 63, 0.06),
+    rgba(59, 61, 63, 0.12),
+    rgba(59, 61, 63, 0.06)
+  );
+  background-size: 200% 100%;
+  animation: ss-shimmer 1.4s linear infinite;
+}
+
+.ss-skeleton-row:nth-child(2) { width: 82%; }
+.ss-skeleton-row:nth-child(3) { width: 64%; }
+
+@keyframes ss-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.ss-empty {
+  padding: var(--space-32, 32px) 0;
+  color: var(--text-light, #6B6F73);
+  font-size: 12.8px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.ss-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-12, 12px);
+  padding: var(--space-32, 32px) 0;
+  text-align: center;
+}
+
+.ss-error p {
+  margin: 0;
+  color: var(--text-light, #6B6F73);
+  font-size: 12.8px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ss-retry {
+  min-height: 34px;
+  padding: 0 var(--space-16, 16px);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--accent-light, rgba(83, 125, 150, 0.08));
+  color: var(--accent, #537D96);
+  font: inherit;
+  font-size: 12.8px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ss-retry:active { transform: scale(0.97); }
+
+/* ---------------- 键盘焦点 ---------------- */
+
+/* 面板是程序化落点（tabindex="-1"）：它不算「一站」，焦点默认框会画在占屏幕 3/4 的
+   大盒子上，看上去像一条错位的边线，所以这里只关面板自己的框。 */
+.ss-panel:focus { outline: none; }
+
+/* 真正的站（✕ / 重试 / 思考行 / 折叠行）才给焦点环。颜色走 --accent：深色下它自动
+   提亮成亮蓝（#8FB4CB），压在面板底 #201C18 上约 7.8:1，不用在 dark.css 里另开一条。
+   折叠行的选择器带 data-view 前缀，与上面折叠规则同一口径：这个按钮只在沉静视图里存在。 */
+.ss-close:focus-visible,
+.ss-retry:focus-visible,
+.ss-step[role="button"]:focus-visible,
+.subagent-sheet[data-view="serene"] .ss-fold-toggle:focus-visible {
+  outline: 2px solid var(--accent, #537D96);
+  outline-offset: 2px;
+}
+
+/* ---------------- 降低动态 ---------------- */
+
+/* 系统开了「减少动态效果」：不做位移，只做透明度（契约 2.4）。
+   面板的 transform 要在 open / closing 两态都压成 none，否则收尾还会滑一下。 */
+@media (prefers-reduced-motion: reduce) {
+  .ss-backdrop {
+    transition: opacity 0.18s linear;
+  }
+
+  .ss-panel {
+    transform: none;
+    transition: opacity 0.18s linear;
+  }
+
+  .subagent-sheet[data-state="open"] .ss-panel,
+  .subagent-sheet[data-state="closing"] .ss-panel {
+    transform: none;
+  }
+
+  .subagent-sheet[data-state="closing"] .ss-panel { opacity: 0; }
+
+  .ss-status[data-status="running"]::before,
+  .ss-step[data-status="running"] .ss-dot,
+  .ss-skeleton-row {
+    animation: none;
+  }
+}

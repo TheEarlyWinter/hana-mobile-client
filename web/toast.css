@@ -1,0 +1,218 @@
+/* web/toast.css — 提示条（E5）
+ *
+ * 命名空间全部以 .toast 打头，不碰全局类；颜色、间距、圆角一律走主题变量，
+ * 没定义时回落到纸色系统的原值（与 action-confirmation.css 一致）。
+ *
+ * 结构（由 web/toast.js 建）：
+ *   #flashBar.toast-stack            role=status / aria-live=polite
+ *     .toast.toast--error|info       error 是 role=alert
+ *       .toast-row
+ *         .toast-text              长文本 .is-clamped（2 行）/ .is-expanded（40vh 滚动）
+ *         .toast-count             ×2
+ *         .toast-actions           展开 / 详情 / ✕
+ *       .toast-detail-wrap         详情面板（默认 hidden）
+ *         .toast-detail-head       详情 + 复制
+ *         pre.toast-detail         等宽原文，可选中、可滚动
+ *
+ * 为什么要 pointer-events 两层：容器铺在页面顶部，不能吃掉下层点击；
+ * 只有真正的提示卡片和按钮接收事件。
+ */
+
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  top: calc(env(safe-area-inset-top, 0px) + 64px);
+  transform: translateX(-50%);
+  width: calc(100% - 24px);
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9998; /* 低于确认弹窗（9999），高于页面内容 */
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.toast-stack[hidden] {
+  display: none !important;
+}
+
+.toast {
+  pointer-events: auto;
+  box-sizing: border-box;
+  border-radius: var(--radius-md, 12px);
+  padding: var(--space-10, 10px) var(--space-12, 12px);
+  font-family: var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif);
+  font-size: var(--fs-ui, 0.82rem);
+  line-height: 1.5;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  animation: toast-in var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+  word-break: break-word;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 业务性错误：深红底白字，常驻到用户点 ✕ */
+.toast--error {
+  background: rgba(168, 38, 38, 0.96);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+/* 一次性提示（已复制、上传成功之类）：纸色卡片，3 秒后自己走 */
+.toast--info {
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--text, #3B3D3F);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.toast-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8, 8px);
+}
+
+/* 正文：默认按自然换行排；折叠时只留 2 行 */
+.toast-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+.toast-text.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* 展开后全文可读，最长 40vh，超出滚动 */
+.toast-text.is-expanded {
+  max-height: 40vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.toast-count {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-micro, 0.75rem);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.toast--info .toast-count {
+  background: var(--border-soft, rgba(122, 96, 88, 0.14));
+  color: var(--text-light, #5C5855);
+}
+
+.toast-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 按钮：手机上的可点面积至少 32px，文字保持小 */
+.toast-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-ui, 0.8rem);
+  line-height: 1;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-xs, 6px);
+  cursor: pointer;
+  opacity: 0.92;
+}
+
+.toast-btn:hover,
+.toast-btn:active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.toast--info .toast-btn:hover,
+.toast--info .toast-btn:active {
+  background: var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.toast-btn:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.toast-close {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+/* ------------------------------ 详情面板 ------------------------------ */
+
+.toast-detail-wrap {
+  margin-top: var(--space-8, 8px);
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  padding-top: var(--space-8, 8px);
+}
+
+.toast--info .toast-detail-wrap {
+  border-top-color: var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.toast-detail-wrap[hidden] {
+  display: none !important;
+}
+
+.toast-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8, 8px);
+  margin-bottom: 4px;
+}
+
+.toast-detail-label {
+  font-size: var(--fs-micro, 0.75rem);
+  opacity: 0.8;
+}
+
+/* 原始报错：等宽、保留缩进与换行，可选中复制，最长 40vh */
+.toast-detail {
+  margin: 0;
+  padding: var(--space-8, 8px);
+  border-radius: var(--radius-xs, 6px);
+  background: rgba(0, 0, 0, 0.22);
+  color: inherit;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: var(--fs-micro, 0.75rem);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.toast--info .toast-detail {
+  background: var(--bg, #F8F4ED);
+  color: var(--text-light, #5C5855);
+}

@@ -1,0 +1,86 @@
+name: CI
+
+# 只在两种时候跑：推到 main、以及给别人看的 PR。
+# 分片并行是因为全量单跑要 330 秒左右，四片能把墙钟压到一分多。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    name: 语法检查
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      # runner 起跑前会构建前端（esbuild），干净环境必须有 node_modules；
+      # 缺了这一步，第一步就失败在“构建 web/dist”。
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 所有 web / gateway / scripts 模块过一遍 node --check
+        shell: pwsh
+        run: |
+          $targets = @(Get-ChildItem -Path web,gateway,scripts -Recurse -Filter *.js -File) +
+                     @(Get-ChildItem -Path web,gateway,scripts -Recurse -Filter *.mjs -File)
+          $fail = 0
+          foreach ($f in $targets) {
+            node --check $f.FullName
+            if ($LASTEXITCODE -ne 0) { Write-Host "语法错误：$($f.FullName)"; $fail += 1 }
+          }
+          Write-Host "检查了 $($targets.Count) 个文件，错误 $fail 个"
+          if ($fail -gt 0) { exit 1 }
+
+  tests:
+    name: 测试（分片 ${{ matrix.shard }}）
+    runs-on: windows-latest
+    needs: syntax
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    env:
+      # 要真实浏览器 / 真实网关的用例在 CI 里没有稳定环境，由它们自己看这个开关跳过。
+      # 本地跑时不要设它，那几条才会真的执行。
+      HANA_SKIP_BROWSER_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 有几个测试会用 javac 编一段 Java 再跑，缺 JDK 会直接红。
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 跑分片 ${{ matrix.shard }}
+        shell: pwsh
+        run: node scripts/run-all-tests.mjs --shard ${{ matrix.shard }} --timeout 180
+
+      - name: 失败时留下日志
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-logs-${{ strategy.job-index }}
+          path: tests/artifacts/**
+          if-no-files-found: ignore
+          retention-days: 7

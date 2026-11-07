@@ -1,0 +1,66 @@
+/* web/pending-state.css — E4「已送达感」：助手还没吐字时的「正在思考」占位块
+ *
+ * 点发送到模型吐第一个字之间常见好几秒。这段时间界面上原本什么都没有，
+ * 看起来就像消息没发出去。这里补一个助手侧占位：头像 + 名字 + 三颗跳动的点。
+ *
+ * 骨架（.turn.assistant / .turn-head / .turn-main / .turn-body）直接复用 style.css，
+ * 所以缩进、头像尺寸、与上下一条消息的间距都和真实助手消息一致；第一个 delta
+ * 到达时占位块被撤掉，同一位置换成正文，读起来是「占位变成了内容」而不是「跳了一下」。
+ * 本文件只管气泡与点，类名一律 pending- 前缀，不碰其它模块的选择器。
+ *
+ * 由装配层在 index.html 里登记（顺序与其它功能 CSS 相同，放在 style.css 之后）：
+ *   <link rel="stylesheet" href="/pending-state.css" />
+ */
+
+.pending-tip {
+  /* 只是个状态提示，不该抢滑动手势，也点不动 */
+  pointer-events: none;
+}
+
+.pending-bubble {
+  display: inline-flex;
+  /* .turn-body 是纵向 flex，默认 stretch 会把这颗小气泡拉成整行宽 */
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-14);
+  border-radius: var(--radius-chat-card) var(--radius-chat-card) var(--radius-chat-card-inner) var(--radius-chat-card);
+  background: var(--overlay-subtle, rgba(0, 0, 0, .03));
+  color: var(--text-muted, #6B6F73);
+  font-size: var(--fs-ui, 0.82rem);
+  line-height: 1.2;
+}
+
+.pending-dots {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 0.9em;
+}
+
+.pending-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .35;
+  animation: pending-dot-bounce 1.15s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) infinite;
+}
+
+/* 三颗点错相位：看起来是「依次顶上来的一个念头」，不是三颗一起闪 */
+.pending-dot:nth-child(2) { animation-delay: .16s; }
+.pending-dot:nth-child(3) { animation-delay: .32s; }
+
+@keyframes pending-dot-bounce {
+  0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* 系统的「减少动态效果」优先：不动，但仍然看得出是在等 */
+@media (prefers-reduced-motion: reduce) {
+  .pending-dot {
+    animation: none;
+    opacity: .55;
+  }
+}

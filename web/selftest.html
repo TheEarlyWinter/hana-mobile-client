@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>attach 自检</title></head>
+<body>
+<pre id="out">running…</pre>
+<script type="module">
+import { prepareImage, fitWithin, validateForSend, buildPromptFrame } from './attach.js';
+
+const log = [];
+const say = (k, v) => log.push(`${k}: ${v}`);
+const done = () => { document.getElementById('out').textContent = log.join('\n'); };
+
+async function makeBigPng(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, '#537D96');
+  g.addColorStop(1, '#F8F4ED');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  return new File([blob], 'big.png', { type: 'image/png' });
+}
+
+try {
+  const file = await makeBigPng(4000, 3000);
+  say('source', `${file.size} bytes, ${file.type}`);
+
+  const t0 = performance.now();
+  const att = await prepareImage(file);
+  say('elapsed_ms', Math.round(performance.now() - t0));
+  say('out_mime', att.mimeType);
+  say('out_dims', `${att.width}x${att.height}`);
+  say('out_bytes', `${att.bytes} (from ${att.originalBytes})`);
+  say('resized', att.resized);
+  say('base64_len', att.base64.length);
+  say('no_data_prefix', !att.base64.startsWith('data:'));
+  say('preview_is_dataurl', att.previewUrl.startsWith('data:' + att.mimeType + ';base64,'));
+  say('shrunk', att.bytes < att.originalBytes);
+
+  // 小图应原样保留
+  const small = await makeBigPng(300, 200);
+  const smallAtt = await prepareImage(small);
+  say('small_kept_mime', smallAtt.mimeType);
+  say('small_kept_dims', `${smallAtt.width}x${smallAtt.height}`);
+
+  // 整套校验 + 帧
+  const problem = validateForSend([{ mimeType: att.mimeType, data: att.base64 }]);
+  say('validate', problem === null ? 'ok' : problem);
+  const frame = buildPromptFrame({ session: { sessionId: 's', path: 'p' }, text: '看图', attachments: [att], inputId: 'm-1' });
+  say('frame_images', frame.images.length);
+  say('frame_mime', frame.images[0].mimeType);
+  say('frame_data_matches', frame.images[0].data === att.base64);
+} catch (err) {
+  say('ERROR', err && (err.stack || err.message || String(err)));
+}
+say('fitWithin_sanity', JSON.stringify(fitWithin(4032, 3024)));
+done();
+</script>
+</body></html>

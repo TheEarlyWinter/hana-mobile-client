@@ -1,0 +1,136 @@
+/* web/action-confirmation.css — 卡片与工作区动作确认弹窗样式
+ *
+ * 遵循项目纸色系统与主题变量，独立命名空间 .h-confirm-*，杜绝全局样式污染。
+ */
+
+.h-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background-color: rgba(30, 26, 24, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-16, 16px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  opacity: 1;
+  transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.h-confirm-modal {
+  width: 100%;
+  max-width: 420px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  color: var(--text, #3B3D3F);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-top: 1px solid #FFFFFF;
+  border-radius: 22px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: h-confirm-pop var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+@keyframes h-confirm-pop {
+  from {
+    transform: scale(0.96) translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+.h-confirm-header {
+  padding: var(--space-16, 16px) var(--space-16, 16px) var(--space-8, 8px);
+}
+
+.h-confirm-title {
+  margin: 0;
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--fs-title, 1rem);
+  font-weight: 600;
+  color: var(--text, #3B3D3F);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.h-confirm-body {
+  padding: 0 var(--space-16, 16px) var(--space-12, 12px);
+  overflow-y: auto;
+  max-height: 50vh;
+}
+
+.h-confirm-message {
+  margin: 0 0 var(--space-8, 8px);
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--fs-body, 0.9rem);
+  color: var(--text-light, #5C5855);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.h-confirm-details {
+  margin: var(--space-8, 8px) 0 0;
+  padding: var(--space-8, 8px);
+  background: var(--bg, #F8F4ED);
+  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+  border-radius: var(--radius-xs, 4px);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro, 0.75rem);
+  color: var(--text-muted, #7C7772);
+  line-height: 1.4;
+  overflow-x: auto;
+  max-height: 160px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.h-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8, 8px);
+  padding: var(--space-12, 12px) var(--space-16, 16px);
+  background: var(--surface-raised, #FFFDF9);
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.h-confirm-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs, 4px);
+  padding: var(--space-8, 8px) var(--space-14, 14px);
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--fs-ui, 0.82rem);
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: background-color var(--duration-fast, 0.15s), border-color var(--duration-fast, 0.15s);
+}
+
+.h-confirm-btn-cancel {
+  background: transparent;
+  border-color: var(--border, rgba(122, 96, 88, 0.2));
+  color: var(--text, #3B3D3F);
+}
+
+.h-confirm-btn-cancel:hover,
+.h-confirm-btn-cancel:active {
+  background: var(--bg, #F8F4ED);
+}
+
+.h-confirm-btn-allow {
+  background: var(--accent, #D96A43);
+  color: #FFFFFF;
+}
+
+.h-confirm-btn-allow:hover,
+.h-confirm-btn-allow:active {
+  background: var(--accent-hover, #C35B35);
+}

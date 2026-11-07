@@ -1,0 +1,33 @@
+# 构建产物与本地缓存
+node_modules/
+web/dist/
+android/build/
+android/dist/
+android/build-artifacts/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# 测试跑出来的东西（体积大、可重生成）
+tests/artifacts/
+
+# 下载目录：安装包不进仓库，但下载页和最新版本信息要进
+web/download/*.apk
+!web/download/index.html
+!web/download/latest.json
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# 本地日志与临时文件
+*.log
+gateway/logs/
+tmp/
+
+# 个人部署配置：模板进仓库，真正的 remote.json（自己的隧道域名）不进
+gateway/remote.json

@@ -1,0 +1,4 @@
+{
+  "publicBaseUrl": "https://your-tunnel-host.example.com/",
+  "allowedOrigins": ["https://your-tunnel-host.example.com"]
+}

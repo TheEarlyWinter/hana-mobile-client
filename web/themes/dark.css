@@ -1,0 +1,550 @@
+/*
+ * Hana Theme: Dark（深色）
+ *
+ * 只在 <html data-theme="dark"> 下生效。所有规则都带 `:root[data-theme='dark']` 前缀，
+ * 特异性高于 warm-paper 与 style.css 的 `:root`，因此浅色（data-theme 为 light 或无属性）
+ * 一个字节都不会被这层影响。
+ *
+ * 分两段：
+ *   1. 变量层：把 warm-paper 的 62 个 token 全部改成深色值，
+ *      再补上项目里一直在用、但 warm-paper 没定义的几个 token（--surface / --on-accent ...）。
+ *      这一层就解决了大部分界面：聊天正文、用户气泡、卡片、输入卡、抽屉列表、Toast 都只吃 token。
+ *   2. 组件层：style.css 与几个组件 CSS 里那些「白玻璃 / 白纸」字面量，
+ *      在深色下会变成刺眼的白片，这里按组件逐个压深（背景、边框、阴影、骨架屏、浮层）。
+ *
+ * 配色原则：暖色深底（不是纯黑），保住「暖纸」的调性；文字用暖白；
+ * 强调色换成更亮的钢蓝，因为浅色那支 #537D96 在深底上对比不足。
+ */
+
+/* ------------------------------------------------------------------ */
+/* 1. 变量层                                                           */
+/* ------------------------------------------------------------------ */
+
+:root[data-theme='dark'] {
+    /* 原生控件（滚动条、输入框、日期选择器）也跟着走深色 */
+    color-scheme: dark;
+
+    /* 背景：暖色深底。纸纹是给浅底做的噪点图，深色下直接关掉，改由纯色底兜住 */
+    --bg:           #171310;
+    --bg-texture:   none;
+    --bg-card:      #1E1A17;
+    --bg-glass:     rgba(24, 20, 17, 0.94);
+
+    /* 主色调：深底上要更亮才够对比 */
+    --accent:       #8FB4CB;
+    --accent-hover: #A6C6DA;
+    --accent-light: rgba(143, 180, 203, 0.14);
+
+    /* 文字：暖白三档，越次要越暗 */
+    --text:         #E5DFD4;
+    --text-light:   #B5ADA1;
+    --text-muted:   #9C9387;
+
+    /* 边框与阴影 */
+    --border:       rgba(229, 216, 200, 0.15);
+    --shadow:       rgba(0, 0, 0, 0.50);
+
+    /* 状态色 */
+    --green:        #8CBE90;
+    --green-rgb:    140, 190, 144;
+    --coral:        #E99C99;
+
+    /* 侧边栏 */
+    --sidebar-bg:   #1B1714;
+
+    /* 便笺 */
+    --jian-note-bg:     #26211B;
+    --jian-note-border: rgba(200, 175, 140, 0.16);
+
+    /* 聊天专用 */
+    --hana-text:    #F0EAE0;
+    /* 内容区墨色：聊天正式正文 / 文档正文 / 引用与注释次级 */
+    --content-chat-ink:      #E7E1D6;
+    --content-document-ink:  #E2DCD1;
+    --content-secondary-ink: #A79F93;
+    --mood-bg:      rgba(226, 150, 180, 0.10);
+    --mood-text:    #E8AEC9;
+    --mood-border:  rgba(226, 150, 180, 0.22);
+    --tool-bg:      rgba(255, 255, 255, 0.05);
+    --tool-text:    #9C9387;
+    --user-bg:      rgba(143, 180, 203, 0.14);
+    --drop-overlay-bg: rgba(23, 19, 16, 0.86);
+    --attach-bg:    rgba(255, 255, 255, 0.05);
+
+    /* 辅助色（用于 rgba 拆分和语义色） */
+    --accent-rgb:   143, 180, 203;
+    --coral-rgb:    233, 156, 153;
+    --danger:       #E59A9A;
+    --danger-rgb:   229, 154, 154;
+    /* 浅色里的「黑色叠加」在深色里必须翻成「白色叠加」，否则等于隐形 */
+    --overlay-subtle: rgba(255, 255, 255, 0.045);
+    --overlay-light:  rgba(255, 255, 255, 0.075);
+    --overlay-medium: rgba(255, 255, 255, 0.11);
+    --input-card-border-color: rgba(255, 255, 255, 0.14);
+    --input-card-active-border-color: rgba(255, 255, 255, 0.24);
+    --overlay-strong: rgba(255, 255, 255, 0.17);
+
+    /* Select 下拉箭头：SVG 内联必须硬编码颜色，这里换成浅灰描边（跟随 --text-muted） */
+    --select-arrow: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239C9387' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+
+    /* 终端调色：深色主题为深底 + 浅字（浅色主题反过来是 accent 底 + 卡白字） */
+    --term-bg:                 #1B1815;
+    --term-fg:                 #E5DFD4;
+    --term-cursor:             #8FB4CB;
+    --term-cursor-accent:      #1B1815;
+    --term-selection-bg:       rgba(143, 180, 203, 0.28);
+    --term-ansi-black:         #2A2622;
+    --term-ansi-red:           #E58B8B;
+    --term-ansi-green:         #9BCD9B;
+    --term-ansi-yellow:        #E2C57F;
+    --term-ansi-blue:          #96B8E0;
+    --term-ansi-magenta:       #D3A8DC;
+    --term-ansi-cyan:          #8FD0CC;
+    --term-ansi-white:         #D8D2C7;
+    --term-ansi-bright-black:  #6E675E;
+    --term-ansi-bright-red:    #F0A5A5;
+    --term-ansi-bright-green:  #B4DCB2;
+    --term-ansi-bright-yellow: #F0DCA6;
+    --term-ansi-bright-blue:   #B4CFEF;
+    --term-ansi-bright-magenta:#E4C4EC;
+    --term-ansi-bright-cyan:   #ACDFDA;
+    --term-ansi-bright-white:  #F4EFE6;
+
+    /* ---- 以下是 style.css 定义（--surface-raised / --border-soft）或一直在用
+     *      但从未定义过的 token（--surface / --on-accent / --text-secondary ...）。
+     *      浅色走各自的回退字面量，行为不变；深色必须在这里给出明确值。 ---- */
+
+    /* 内容面：比 --bg-card 亮一档，把「纸」和「消息面」的层次翻到深色里 */
+    --surface-raised:   #201C18;
+    --surface:          #1E1A17;
+    --surface-hover:    rgba(255, 255, 255, 0.06);
+    --border-soft:      rgba(229, 216, 200, 0.10);
+
+    --text-main:        #E7E1D6;
+    --text-sub:         #B0A79B;
+    --text-hint:        rgba(229, 216, 200, 0.55);
+    --text-secondary:   #ACA396;
+    /* mark / 命中高亮的文字色：浅色是「更深的蓝」，深色要「更亮的蓝」 */
+    --accent-dark:      #CFE1EC;
+
+    /* accent 底上的字：深色里 accent 是亮蓝，字必须反过来用深墨 */
+    --on-accent:        #14181B;
+    --danger-bg:        #C06866;
+    --warning:          #D9A961;
+}
+
+/* ------------------------------------------------------------------ */
+/* 2. 组件层：把浅色白玻璃压深                                          */
+/* ------------------------------------------------------------------ */
+
+/* 首页弥散光斑：浅色下它们负责提亮，深色下只留一丝颜色当气氛 */
+:root[data-theme='dark'] .liquid-auras .aura {
+  opacity: 0.26;
+}
+
+/* 毛玻璃圆钮（首页头部的刷新/新建/抽屉开关） */
+:root[data-theme='dark'] .liquid-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: var(--hana-text);
+}
+:root[data-theme='dark'] .liquid-btn:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* 登录输入框 */
+:root[data-theme='dark'] .field {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.10);
+  color: var(--text);
+  box-shadow: none;
+}
+:root[data-theme='dark'] .field:focus {
+  border-color: rgba(143, 180, 203, 0.55);
+  box-shadow: 0 0 0 3px rgba(143, 180, 203, 0.14);
+}
+
+/* 登录主按钮：浅色是「写死的中蓝渐变 + 白字」，深色下 --on-accent 翻成深墨，
+ * 但那支渐变并没有跟着提亮，深墨压在中蓝上只剩 3.3:1（比浅色下白字的 3.9:1 还差）。
+ * 这里把底色换成主题 accent #8FB4CB，深墨 #14181B 压上去 8.1:1；按下态原本是写死的
+ * 深蓝 #3C6077（深墨在上面同样失效），一并换成 --accent-hover #A6C6DA（10.0:1）。
+ * 浅色下本规则不命中，.btn-primary 的渐变与白字一个像素不变。 */
+:root[data-theme='dark'] .btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+:root[data-theme='dark'] .btn-primary:active {
+  background: var(--accent-hover);
+}
+
+/* 首页陪伴区头像圈 */
+:root[data-theme='dark'] .hero-avatar-ring {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.40);
+}
+
+/* Agent 药丸 */
+:root[data-theme='dark'] .agent-pill {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.10);
+  color: var(--text);
+  box-shadow: none;
+}
+:root[data-theme='dark'] .agent-pill.active {
+  background: rgba(143, 180, 203, 0.16);
+  border-color: rgba(143, 180, 203, 0.55);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(143, 180, 203, 0.12);
+  color: var(--accent);
+}
+:root[data-theme='dark'] .agent-pill-avatar {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 首页悬浮输入岛 */
+:root[data-theme='dark'] .home-composer-card {
+  background: rgba(38, 33, 28, 0.86);
+  border-color: rgba(255, 255, 255, 0.10);
+  border-top-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.30);
+}
+:root[data-theme='dark'] .home-composer-card:focus-within {
+  border-color: rgba(143, 180, 203, 0.55);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), 0 0 0 2px rgba(143, 180, 203, 0.14);
+}
+:root[data-theme='dark'] .home-input::placeholder {
+  color: var(--text-muted);
+}
+:root[data-theme='dark'] .home-composer-bar {
+  border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+/* 输入岛内的 chip 与发送键：浅色是「浮黑底浅字」，深色统一成半透明白底 */
+:root[data-theme='dark'] .composer-chip-btn,
+:root[data-theme='dark'] .icon-chip-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+:root[data-theme='dark'] .composer-chip-btn:active,
+:root[data-theme='dark'] .icon-chip-btn:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+/* 发送键：浅色是近黑药丸，深色下近黑会消失，改用亮 accent 配深墨字 */
+:root[data-theme='dark'] .btn-home-send {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.40);
+}
+
+/* 底部「历史会话」拉手 */
+:root[data-theme='dark'] .peek-pill {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* 侧边抽屉（会话与项目） */
+:root[data-theme='dark'] .history-drawer-mask {
+  background: rgba(0, 0, 0, 0.55);
+}
+:root[data-theme='dark'] .history-drawer-panel {
+  background: rgba(26, 22, 19, 0.94);
+  border-right-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 12px 0 36px rgba(0, 0, 0, 0.50);
+}
+:root[data-theme='dark'] .drawer-head {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+/* 聊天输入卡：浅色是「比纸更白的卡片浮在纸上」；深色若沿用 --bg-card（#1E1A17），
+ * 就变成比内容面 --surface-raised（#201C18）更暗，视觉语义从「浮起」翻成「凹陷」。
+ * 这里给一档比内容面亮的值 #282420（三个通道各 +8，暖调不变），把层次转回来：
+ * 卡片对内容面 1.10:1（浅色同一对 1.03:1）、正文 --text #E5DFD4 压上去 11.6:1。
+ * 阴影不用改：0.45 黑在亮一档的卡片下反而更容易看出投影。 */
+:root[data-theme='dark'] .composer-card {
+  background: #282420;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+}
+
+/* 会话骨架屏：浅色下是「比纸更深的灰」，深色下必须翻成「比底更亮的白」 */
+:root[data-theme='dark'] .skeleton-avatar {
+  background: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme='dark'] .skeleton-user-bubble {
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme='dark'] .skeleton-line {
+  background: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme='dark'] .skeleton-avatar::after,
+:root[data-theme='dark'] .skeleton-user-bubble::after,
+:root[data-theme='dark'] .skeleton-line::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.14) 50%,
+    transparent 100%
+  );
+}
+
+/* 附件缩略图上的「上传中」蒙层：浅色蒙层在深色下会发白 */
+:root[data-theme='dark'] .attach-chip .attach-pending {
+  background: rgba(23, 19, 16, 0.82);
+}
+
+/* 启动盘底：红色条 + 白字，深色下把红压深一点，保住白字对比 */
+:root[data-theme='dark'] .boot-error {
+  background: #7A2F2F;
+  color: #F6EDE9;
+}
+
+/* 卡片 iframe：里面是卡片自己的文档，壳层不做反色（反了反而毁卡片），只压外框 */
+:root[data-theme='dark'] .card-block {
+  background: var(--bg-card);
+}
+
+/* 归档会话面板：浅色走 --surface 回退的纯白，深色必须给深底 */
+:root[data-theme='dark'] .archive-panel {
+  background: var(--bg);
+}
+
+/* 工作区只读预览里的大段文本：浅底黑字贴在深色壳上像一张白纸，翻成深底浅字 */
+:root[data-theme='dark'] .workspace-preview-text {
+  background: #1D1916;
+  color: var(--text);
+}
+
+/* ---- 闲聊（casual）里的错误提示：写死的浅红底在深色下会变成一道白粉条 ---- */
+:root[data-theme='dark'] .casual-error-bar {
+  background: rgba(229, 154, 154, 0.12);
+  color: var(--danger);
+  border-bottom-color: rgba(229, 154, 154, 0.34);
+}
+:root[data-theme='dark'] .casual-status--failed {
+  background: rgba(229, 154, 154, 0.14);
+  border-color: rgba(229, 154, 154, 0.55);
+  color: var(--danger);
+}
+
+/* ---- 浮层：这几张面板在各自的 CSS 里写死了浅色玻璃，需要逐个压深 ---- */
+
+/* 会话操作（重命名 / 归档 / 删除） */
+:root[data-theme='dark'] .sa-sheet {
+  background: rgba(30, 26, 22, 0.94);
+  border-color: rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.50);
+}
+
+/* 消息操作菜单 */
+:root[data-theme='dark'] .msg-actions-item {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+/* 授权确认弹窗 */
+:root[data-theme='dark'] .h-confirm-modal {
+  background: rgba(32, 28, 24, 0.94);
+  border-color: rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+/* 主按钮底色是亮 accent，白字在深色下对比不足 */
+:root[data-theme='dark'] .h-confirm-btn-allow {
+  color: var(--on-accent);
+}
+
+/* 会话操作里的主按钮同理（.sa-btn-primary 写死了白字） */
+:root[data-theme='dark'] .sa-btn-primary {
+  color: var(--on-accent);
+}
+
+/* ---- 设置面板（settings.css 里的白玻璃） ---- */
+
+:root[data-theme='dark'] .settings-mask {
+  background: rgba(0, 0, 0, 0.50);
+}
+:root[data-theme='dark'] .settings-drawer {
+  background: rgba(26, 22, 19, 0.92);
+  border-left-color: rgba(255, 255, 255, 0.08);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.50);
+}
+:root[data-theme='dark'] .settings-head {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+:root[data-theme='dark'] .settings-btn {
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme='dark'] .settings-model-item {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+:root[data-theme='dark'] .settings-model-item.active {
+  background: rgba(143, 180, 203, 0.14);
+  border-color: rgba(143, 180, 203, 0.50);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme='dark'] .settings-model-item.disabled:active {
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme='dark'] .settings-section-badge.warning {
+  background: rgba(229, 154, 154, 0.14);
+}
+/* 分段控制器：浅色是「浅底 + 白片」，深色是「更深的槽 + 微亮片」 */
+:root[data-theme='dark'] .settings-segmented-control {
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme='dark'] .settings-segment-btn.active {
+  background: rgba(143, 180, 203, 0.16);
+  color: var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+/* 二级设置项（接入方式）与破坏性操作 */
+:root[data-theme='dark'] .settings-link-row {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.10);
+}
+:root[data-theme='dark'] .settings-link-row:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+:root[data-theme='dark'] .settings-danger-btn {
+  background: rgba(229, 154, 154, 0.06);
+  border-color: rgba(229, 154, 154, 0.34);
+  color: var(--danger);
+}
+:root[data-theme='dark'] .settings-danger-btn:active {
+  background: rgba(229, 154, 154, 0.14);
+}
+
+/* ------------------------------------------------------------------ */
+/* 3. 补漏：只吃 token 但结果会「发白」的几块                            */
+/* ------------------------------------------------------------------ */
+
+/* 先记两处「查过但不用补」的，免得后来人重复找：
+ *   code-panel.css  —— 面板/摘要/工作树/改动项/diff 全部走 --bg-card、
+ *                      --surface-raised、--sidebar-bg、--overlay-medium，
+ *                      这几个 token 上面都已给出深色值，字也全走 --text 系。
+ *   pending-state.css —— 气泡只有 --overlay-subtle 一层淡底 + --text-muted 字，
+ *                      深色里 --overlay-subtle 已翻成白色叠加，天然是对的。
+ */
+
+/* 断线细条（connection-banner.css）：浅色那套是「深红实底 + 纸白字」。
+ * 深色里 --danger-rgb 已经翻成浅珊瑚，0.94 的实底会把整条顶部变成一道
+ * 发白的粉带，白字压上去也糊。这里自留一支深红，保住「坏消息要被看见」的
+ * 重量；阴影换纯黑，免得珊瑚色光晕顺着屏幕边溢出。
+ * 恢复态（.is-up）走 --bg-glass / --text / --border，深色已自动成立，不动。 */
+:root[data-theme='dark'] .connection-banner.is-down {
+  background: rgba(122, 48, 46, 0.94);
+  color: var(--hana-text);
+  box-shadow: 0 1px 10px rgba(0, 0, 0, 0.45);
+}
+
+/* 日报（feed.css，不含报纸卡）：未读角标与两个主行动写死了 #FFFDF9 白字，
+ * 深色里 --accent 提亮成亮蓝后，白字压上去直接糊成一片白。
+ * 首页那张「报纸」纸片 .feed-entry 是刻意的白纸，保持原样。 */
+:root[data-theme='dark'] .feed-badge,
+:root[data-theme='dark'] .feed-question-send,
+:root[data-theme='dark'] .feed-reader-ask {
+  color: var(--on-accent);
+}
+
+/* 闲聊（casual.css）：自己那侧的气泡与发送键同样是「accent 实底 + #FFFFFF」，
+ * 深色下 accent 变亮后白字读不出来；改成 accent 上的深墨（与发送键、
+ * 确认弹窗主按钮同一套做法）。 */
+:root[data-theme='dark'] .casual-row--user .casual-bubble,
+:root[data-theme='dark'] .casual-send-btn {
+  color: var(--on-accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* 4. 消息与会话搜索面板（style.css 的 .message-search-*）               */
+/* ------------------------------------------------------------------ */
+
+/* 面板与页面得能分开。浅色靠「白片 + 黑阴影」，深色下这两样都失效：
+ * --bg-card #1E1A17 与 --bg #171310 只差 1.04:1，0.12 的黑阴影压在黑底上等于没有。
+ * 这里补的正是同文件 .sa-sheet 那三件套：深底 + 白描边 + 0.50 黑阴影；
+ * 遮罩也从暖黑 0.45 换成纯黑 0.55，把身后的页面再压一层（.settings-mask 同一做法）。
+ * 量化：描边（白 0.10 叠在面板底上 ≈ #35312D）对压暗后的页面 = 1.54:1，
+ * 面板底对压暗后的页面 = 1.15:1，再加 0.50 黑阴影的投影带收边。 */
+:root[data-theme='dark'] .message-search-overlay {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme='dark'] .message-search-dialog {
+  background: rgba(30, 26, 22, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.50);
+}
+
+/* 搜索框边界：浅色那支 --border（白 0.15）压在 #171310 上只有 1.44:1，
+ * 输入框底与标题栏底（#171310 vs #201C18）只差 1.09:1，两者合起来等于没有轮廓。
+ * 白 0.38 是在这套底色上能真正过 3:1 的最低一档：对标题栏 3.29:1、对输入框自身底色 3.58:1，
+ * 也是 Material 深色主题 outlined 控件的取值。再低（0.22 只有 1.85:1）就过不了。 */
+:root[data-theme='dark'] .message-search-input {
+  border-color: rgba(255, 255, 255, 0.38);
+}
+
+/* 上面那条特异性 (0,3,0)，会盖掉 style.css 的 .message-search-input:focus (0,2,0)，
+ * 不在这里把聚焦态接回来，深色下聚焦就丢了 accent 边。 */
+:root[data-theme='dark'] .message-search-input:focus {
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* 5. 子代理详情 sheet（subagent-sheet.css）                            */
+/* ------------------------------------------------------------------ */
+
+/* 遮罩：浅色是「28% 墨色」，深色里墨色压在深底上等于没压暗（#171310 上叠出 #211F1D，
+ * 与面板底 #201C18 几乎同色），弹层会和页面糊成一片、aria-modal 的观感也没了。
+ * 值挂在 .subagent-sheet 上给 .ss-backdrop 吃：浅色没这个 token，走组件 CSS 里的回退字面量，
+ * 两边是同一个变量名，不用在组件样式里分叉。 */
+:root[data-theme='dark'] .subagent-sheet {
+  --overlay-scrim: rgba(0, 0, 0, 0.55);
+}
+
+/* 加载骨架：组件里写死的是「比纸更深的灰」，深底上比面板还暗，加载那一下正文是空白的。
+ * 翻成白色叠加（与上面 .skeleton-line 同一口径）；只换 background-image，
+ * 保住基础规则里的 background-size:200% 与 animation，否则微光不会走。 */
+:root[data-theme='dark'] .ss-skeleton-row {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.11),
+    rgba(255, 255, 255, 0.05)
+  );
+}
+
+/* 结论里的行内代码：浅色是 5% 墨色底，深色下等于没有底，代码与正文长得一样 */
+:root[data-theme='dark'] .ss-step-text code {
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+/* 失败态文字：写死的 #C06866 在 #201C18 上只有 4.4:1（11px 字不够看），
+ * 改用主题珊瑚（--coral），与状态点的取色回到同一支 */
+:root[data-theme='dark'] .ss-status[data-status="failed"] {
+  color: var(--coral);
+}
+
+/* ------------------------------------------------------------------ */
+/* 6. 子代理过程胶囊（style.css 的 .subagent-chip）                      */
+/* ------------------------------------------------------------------ */
+
+/* 胶囊底写死 rgba(59, 61, 63, 0.05) 且没有描边：深色下这层墨色叠在内容面 #201C18 上
+ * 只差 1.01:1，等于没有壳子，只剩一行裸字。改成白色叠加 + 内描边；描边用 inset 阴影
+ * 而不是 border，是因为胶囊高度写死 24px 且 box-sizing 全局是 border-box，加真边框会
+ * 从内容里挤掉 2px。
+ * 量化：填充对内容面 1.24:1、描边对内容面 1.83:1（现有 .agent-pill 的描边只有 1.44:1，
+ * 这里比它清楚一档，但不到 3:1——深色药丸用 3:1 的硬描边会显脏，按设计系统同一档取）；
+ * 正文 --text 压在填充上 10.3:1。
+ * 下面必须补一条按下态：style.css 的 .subagent-chip.is-openable:active 与本规则同为
+ * (0,3,0)，本文件加载在后会把它盖掉，不接回来按下去就没有任何反馈。 */
+:root[data-theme='dark'] .subagent-chip {
+  background: var(--overlay-light);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+:root[data-theme='dark'] .subagent-chip.is-openable:active {
+  background: var(--overlay-strong);
+}

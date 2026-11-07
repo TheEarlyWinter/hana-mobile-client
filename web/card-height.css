@@ -1,0 +1,28 @@
+/* card-height.css — 卡片首帧高度：未就绪先隐身，首个高度上报后淡入
+ *
+ * 为什么不在 style.css 里改 .card-frame 的 220px：那是 iframe 还没建好、上报超时
+ * 情况下必须保留的兜底高度。这里只叠一层状态：
+ *   data-card-ready="0"  未收到任何高度上报 → 透明（.card-block 的底色兜住占位，不闪白块）
+ *   data-card-ready="1"  已就绪 → 可见，并给 height 加过渡，之后内容分批到齐时平滑变高
+ *
+ * 过渡只能出现在就绪之后：如果未就绪时就开 transition，首帧会从 220px 动画到真实高度，
+ * 视觉上还是「跳」，只是慢一点。JS 侧在置就绪前会先强制一次样式结算（见 card.js）。
+ *
+ * 用 opacity 而不是 visibility/display：opacity:0 的 iframe 仍然参与布局与渲染，
+ * 卡片脚本的 ResizeObserver 照常工作，不会把自己憋成永远不报高度。
+ */
+
+.card-frame[data-card-ready="0"] {
+  opacity: 0;
+}
+
+.card-frame[data-card-ready="1"] {
+  opacity: 1;
+  transition: height 0.18s ease, opacity 0.18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-frame[data-card-ready="1"] {
+    transition: none;
+  }
+}

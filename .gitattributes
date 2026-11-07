@@ -1,0 +1,11 @@
+# 行尾统一用 LF，避免 Windows 上反复出现「LF 会被替换成 CRLF」的提示
+* text=auto eol=lf
+# cmd.exe 批处理需要 CRLF；只覆盖网关守护脚本。
+gateway/supervise.cmd text eol=crlf
+
+# 二进制文件不要做行尾转换
+*.png binary
+*.jpg binary
+*.apk binary
+*.zip binary
+*.jar binary

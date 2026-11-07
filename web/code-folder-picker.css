@@ -1,0 +1,360 @@
+/* web/code-folder-picker.css — 新建 Code 会话的目录选择器
+ *
+ * 只加 code-folder- 前缀，不覆盖 style.css / workspace.css 的任何声明。
+ * 结构由 web/code-folder-picker.js 生成（改类名前先改那边）：
+ *   .code-folder-root            遮罩层，role="dialog"
+ *     .code-folder-sheet         面板（底部弹出，可聚焦）
+ *       .code-folder-head        标题 + 关闭
+ *       .code-folder-body        状态 / 提示 / 根列表 / 手动输入
+ *         .code-folder-status    加载中 / 已就绪 / 空态 / 错误
+ *         .code-folder-hint      次级说明（默认隐藏）
+ *         .code-folder-list      可用工作区根
+ *           .code-folder-item    一行：名称 + 中间省略的路径
+ *         .code-folder-manual    手动输入入口（始终存在）
+ *       .code-folder-foot        重试（仅错误/空态）+ 取消
+ *
+ * 层级：高于工作区抽屉（150）、低于图片灯箱（300）与 toast（9998）。
+ */
+
+.code-folder-root {
+  position: fixed;
+  inset: 0;
+  z-index: 280;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--space-16, 16px);
+  padding-bottom: calc(var(--space-16, 16px) + env(safe-area-inset-bottom, 0px));
+  background: rgba(24, 22, 20, 0.42);
+  color: var(--text, #3B3D3F);
+  font-family: var(--font-ui, sans-serif);
+  /* 面板自身可滚，遮罩不再跟着页面滚 */
+  overscroll-behavior: contain;
+  animation: code-folder-fade var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.code-folder-sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 520px;
+  max-height: 78vh;
+  max-height: min(78dvh, 640px);
+  overflow: hidden;
+  background: var(--bg-card, #FCFAF5);
+  border: 1px solid var(--border, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-page, 18px);
+  box-shadow: 0 18px 48px var(--shadow, rgba(59, 61, 63, 0.09));
+  animation: code-folder-rise var(--duration-slow, 0.25s) var(--ease-out, ease-out);
+}
+
+/* 程序化聚焦的容器，只在键盘导航时给一圈弱提示 */
+.code-folder-sheet:focus {
+  outline: none;
+}
+
+.code-folder-sheet:focus-visible {
+  outline: 2px solid var(--accent, #537D96);
+  outline-offset: -2px;
+}
+
+/* ---------------- 头部 ---------------- */
+
+.code-folder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8, 8px);
+  padding: var(--space-14, 14px) var(--space-16, 16px);
+  border-bottom: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.code-folder-title {
+  margin: 0;
+  font-size: var(--fs-title, 1rem);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text, #3B3D3F);
+}
+
+/* ---------------- 通用按钮 ---------------- */
+
+.code-folder-btn {
+  min-height: 40px;
+  padding: 0 var(--space-12, 12px);
+  border: 0;
+  border-radius: var(--radius-md, 10px);
+  background: transparent;
+  color: var(--text, #3B3D3F);
+  font: inherit;
+  font-size: var(--fs-ui, 0.82rem);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 按钮自带 display，必须显式压掉 [hidden]，否则「重试」在正常态还露着 */
+.code-folder-btn[hidden] {
+  display: none !important;
+}
+
+.code-folder-close {
+  flex: 0 0 auto;
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-light, #6B6F73);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.code-folder-close:active {
+  background: var(--overlay-medium, rgba(0, 0, 0, 0.08));
+}
+
+/* ---------------- 主体 ---------------- */
+
+.code-folder-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10, 10px);
+  padding: var(--space-14, 14px) var(--space-16, 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.code-folder-status {
+  margin: 0;
+  font-size: var(--fs-ui, 0.82rem);
+  line-height: 1.5;
+  color: var(--text-light, #6B6F73);
+}
+
+.code-folder-status.is-ready {
+  color: var(--text-muted, #6B6F73);
+}
+
+.code-folder-status.is-empty {
+  color: var(--text, #3B3D3F);
+  font-weight: 500;
+}
+
+.code-folder-status.is-error {
+  color: var(--danger, #8B3A3A);
+  /* 宿主错误串可能带长 URL，允许断行别撑破面板 */
+  word-break: break-word;
+}
+
+.code-folder-hint:not([hidden]) {
+  display: block;
+}
+
+.code-folder-hint {
+  margin: 0;
+  font-size: var(--fs-caption, 0.78rem);
+  line-height: 1.55;
+  color: var(--text-muted, #6B6F73);
+}
+
+/* ---------------- 根列表 ---------------- */
+
+.code-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8, 8px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-folder-list[hidden] {
+  display: none !important;
+}
+
+.code-folder-item-wrap {
+  margin: 0;
+}
+
+.code-folder-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2, 2px);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--space-10, 10px) var(--space-12, 12px);
+  border: 1px solid var(--border, rgba(122, 96, 88, 0.18));
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--text, #3B3D3F);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--duration-fast, 0.15s) var(--ease-out, ease-out),
+              border-color var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.code-folder-item:active {
+  background: var(--accent-light, rgba(83, 125, 150, 0.08));
+  border-color: var(--accent, #537D96);
+}
+
+.code-folder-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 4px);
+  max-width: 100%;
+  overflow: hidden;
+  font-size: var(--fs-body, 0.9rem);
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「最近」标签：区分工作区根与会话历史目录，避免用户以为后者是宿主公开的工作区 */
+.code-folder-tag {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-light, rgba(83, 125, 150, 0.12));
+  color: var(--accent, #537D96);
+  font-size: var(--fs-caption, 0.7rem);
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.code-folder-path {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: var(--fs-caption, 0.78rem);
+  line-height: 1.4;
+  color: var(--text-muted, #6B6F73);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- 手动输入 ---------------- */
+
+.code-folder-manual {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6, 6px);
+  margin-top: var(--space-4, 4px);
+  padding-top: var(--space-12, 12px);
+  border-top: 1px dashed var(--border, rgba(122, 96, 88, 0.18));
+}
+
+.code-folder-manual-label {
+  font-size: var(--fs-caption, 0.78rem);
+  color: var(--text-muted, #6B6F73);
+}
+
+.code-folder-manual-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-8, 8px);
+}
+
+.code-folder-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 var(--space-10, 10px);
+  border: 1px solid var(--input-card-border-color, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-input, 4px);
+  background: var(--surface-raised, #FFFDF9);
+  color: var(--text, #3B3D3F);
+  font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: var(--fs-ui, 0.82rem);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.code-folder-input:focus {
+  outline: none;
+  border-color: var(--accent, #537D96);
+  box-shadow: 0 0 0 2px var(--accent-light, rgba(83, 125, 150, 0.08));
+}
+
+.code-folder-input::placeholder {
+  color: var(--text-muted, #6B6F73);
+  opacity: 0.8;
+}
+
+.code-folder-submit {
+  flex: 0 0 auto;
+  min-height: 40px;
+  border: 1px solid var(--accent, #537D96);
+  background: var(--accent-light, rgba(83, 125, 150, 0.08));
+  color: var(--accent, #537D96);
+  font-weight: 500;
+}
+
+.code-folder-submit:active {
+  background: var(--accent, #537D96);
+  color: var(--bg-card, #FCFAF5);
+}
+
+.code-folder-manual-error {
+  margin: 0;
+  font-size: var(--fs-caption, 0.78rem);
+  color: var(--danger, #8B3A3A);
+}
+
+.code-folder-manual-error[hidden] {
+  display: none;
+}
+
+/* ---------------- 底部 ---------------- */
+
+.code-folder-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-8, 8px);
+  padding: var(--space-10, 10px) var(--space-16, 16px);
+  padding-bottom: calc(var(--space-10, 10px) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
+}
+
+.code-folder-retry {
+  margin-right: auto;
+  color: var(--accent, #537D96);
+}
+
+.code-folder-cancel {
+  font-weight: 500;
+}
+
+/* ---------------- 动效 ---------------- */
+
+@keyframes code-folder-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes code-folder-rise {
+  from { transform: translateY(16px); opacity: 0.4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-folder-root,
+  .code-folder-sheet {
+    animation: none;
+  }
+  .code-folder-item {
+    transition: none;
+  }
+}
