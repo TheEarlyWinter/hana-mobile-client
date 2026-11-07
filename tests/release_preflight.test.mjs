@@ -10,6 +10,9 @@
  *
  * 不跑真实 SDK / 真机 / 真网关，不碰仓库里的 web/download，不生成真签名材料。
  *
+ * 子进程一律经 runner.ps1 拉起（见下文）：它只把本进程的输出编码固定成 UTF-8，
+ * 再原样转交参数。被测脚本本身不因这套回归而改行为。
+ *
  * 红证据：设 HANA_RELEASE_TEST_SOURCE_ROOT 指向一个只放了旧版 scripts/release.ps1 与
  * android/build.ps1 的临时目录（用 `git show HEAD:…` 导出），就能拿同一份用例跑旧脚本，
  * 不需要 git checkout 工作树、不会回退任何人的改动。不设时默认用仓库当前源码。
@@ -252,6 +255,32 @@ if (tool === 'keytool') {
 die('fake tool: 未知工具 ' + tool);
 `;
 
+/* 测试自己拉子进程的入口。为什么要多这一层：
+ *   pwsh 写 stdout/stderr 时按控制台代码页编码，CI runner 是英文系统（CP 437），
+ *   没有中文字形，中文报错就整段变成「?」，断言中文原因的用例永远匹配不到。
+ *   编码是「这套回归怎么读子进程文本」的问题，属于测试，不该写进产品脚本：
+ *   把 [Console]::OutputEncoding 写进 build.ps1 是进程级的，会顺着
+ *   release.ps1 调 build.ps1 那条路污染产品脚本的运行时。
+ * 只用 -File 传参，不拼 -Command 字符串，不用操心引号与转义。
+ */
+const RUNNER_PS1 = String.raw`# 由 tests/release_preflight.test.mjs 生成：先把本进程的输出编码固定成 UTF-8，
+# 再原样转交给真正的被测脚本。没有这一层，英文 runner（CP 437）上的中文会变成「?」。
+$forced = $env:HANA_TEST_RUNNER_CODEPAGE
+if ($forced) {
+  # 只用于在中文开发机上复现 runner 的英文代码页（如 437），验证编码真的有影响。
+  [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding([int]$forced)
+} else {
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+  $OutputEncoding = [System.Text.Encoding]::UTF8
+}
+
+$target = $args[0]
+$rest = @($args | Select-Object -Skip 1)
+& $target @rest
+# 被测脚本自己 exit 会直接结束本进程；走到这里说明它没抛错也没 exit。
+exit 0
+`;
+
 function writeCmd(dir, tool, toolkitDir) {
   const body = [
     '@echo off',
@@ -267,10 +296,16 @@ function prepareToolkit() {
   const toolkitDir = path.join(ARTIFACTS, 'release-preflight-toolkit');
   fs.mkdirSync(toolkitDir, { recursive: true });
   fs.writeFileSync(path.join(toolkitDir, 'fake-tool.mjs'), FAKE_TOOL, 'utf8');
+  fs.writeFileSync(path.join(toolkitDir, 'runner.ps1'), RUNNER_PS1, 'utf8');
   for (const tool of ['aapt2', 'd8', 'zipalign', 'apksigner', 'javac', 'keytool']) {
     writeCmd(toolkitDir, tool, toolkitDir);
   }
   return toolkitDir;
+}
+
+/** 跑被测脚本的固定入口（编码固定发生在这一层，不在产品脚本里）。 */
+function runnerPath() {
+  return path.join(TOOLKIT, 'runner.ps1');
 }
 
 // ---------- 临时项目 ----------
@@ -433,7 +468,16 @@ function makeProject(caseName, opts = {}) {
     run(script, args, envExtra = {}) {
       const r = spawnSync(
         PS,
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args],
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          runnerPath(),
+          script,
+          ...args,
+        ],
         { cwd: proj, env: { ...env, ...envExtra }, timeout: 180000, windowsHide: true },
       );
       const stdout = decodeOutput(r.stdout || Buffer.alloc(0));

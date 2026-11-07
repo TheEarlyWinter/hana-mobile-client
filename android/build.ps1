@@ -18,17 +18,6 @@ param(
   [switch]$Release
 )
 
-# 输出编码固定成 UTF-8。为什么：pwsh 写标准输出/标准错误时按控制台代码页编码，
-# CI runner 是英文系统（CP 437），没有中文字形，于是下面的中文报错整段变成「?」；
-# 本地中文 Windows（CP 936）看不出问题，但读日志的人、以及按中文原因做断言的回归
-# 都会被坑。真实终端里设成 UTF-8 同样只会更准，不损失信息。
-try {
-  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-  $OutputEncoding = [System.Text.Encoding]::UTF8
-} catch {
-  # 拿不到控制台（或宿主禁止改）时保持原样，不能让改编码这件事把构建搞挂。
-}
-
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
