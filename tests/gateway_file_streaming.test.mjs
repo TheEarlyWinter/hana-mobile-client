@@ -37,33 +37,137 @@ const realCreateReadStream = fs.createReadStream;
 const realReadFile = fsp.readFile;
 const realOpen = fsp.open;
 const realStatSync = fs.statSync;
+// realpath 的原生实现也要在包裹之前抓住：下面判定「是不是同一个文件」时会反复用，
+// 但不能走 fs.statSync 那条已进探测范围的入口，否则事件会被自己的判定过程搅浑。
+const nativeRealpathSync = fs.realpathSync.native;
+
+/* ------------------------------------------------------------------ */
+/* 路径同一性                                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 为什么「同一个文件」不能只比 path.resolve：
+ *   gateway 的 file-utils.resolveInsideRoots 会先把请求路径 realpath 成真实路径再打开，
+ *   于是进到 fs 里的是真实路径，而测试手里是自己拼的字面路径。两者在下面几种情形下不等：
+ *     - Windows 8.3 短名：os.tmpdir() 可以返回 `...\HANA-S~2\...`，realpath 展开成长名；
+ *     - junction / 符号链接：realpath 会跳到链接目标；
+ *     - 磁盘上的真实大小写与拼出来的不同（这里统一按大小写不敏感比）。
+ *   CI 的 TEMP 是短名路径，本地开发机是长名，所以「必须打开过内容」的断言只在 runner 上红。
+ * 判定顺序：realpath（含「父目录 realpath + basename」，文件已被删掉也能对上）→ 字面路径
+ *   → 同 basename 且同 size；三层都不中就当没记录到，断言里会说明哪一层没命中。
+ */
+
+function caseKey(p) {
+  const s = String(p);
+  return process.platform === 'win32' ? s.toLowerCase() : s;
+}
+
+function realpathOrNull(p) {
+  try {
+    return nativeRealpathSync.call(fs, p);
+  } catch {
+    return null;
+  }
+}
+
+function sizeOrNull(p) {
+  try {
+    return realStatSync.call(fs, String(p)).size;
+  } catch {
+    return null;
+  }
+}
+
+/** 一个路径可能的全部同一性写法：字面路径、真实路径、父目录真实路径 + 名字。 */
+function identitiesOf(absPath) {
+  const ids = new Set([caseKey(absPath)]);
+  const real = realpathOrNull(absPath);
+  if (real) ids.add(caseKey(real));
+  const parentReal = realpathOrNull(path.dirname(absPath));
+  if (parentReal) ids.add(caseKey(path.join(parentReal, path.basename(absPath))));
+  return ids;
+}
+
+/** 事件与目标共用同一份判定依据（路径同一性集合 + basename + size）。 */
+function describePath(p) {
+  const abs = path.resolve(String(p));
+  return { abs, ids: identitiesOf(abs), base: caseKey(path.basename(abs)), size: sizeOrNull(abs) };
+}
+
+/** 命中哪一层就返回哪一层（path / realpath / basename+size），不是同一个文件返回 null。 */
+function matchLayer(subject, wanted) {
+  const literal = caseKey(wanted.abs);
+  for (const id of subject.ids) {
+    if (!wanted.ids.has(id)) continue;
+    return id === literal ? 'path' : 'realpath';
+  }
+  // 兜底只认「同 basename 且同 size」；两边 size 有一个拿不到就不算命中：
+  // 宁可让断言报「没记录到」，也不要把另一个文件的事件算到目标头上。
+  if (subject.base === wanted.base && subject.size !== null && subject.size === wanted.size) return 'basename+size';
+  return null;
+}
+
+/** 三层比较逐条给结论，断言失败时用来指认是哪一层没命中。 */
+function layerVerdicts(subject, wanted) {
+  const literalKey = caseKey(wanted.abs);
+  const literal = subject.ids.has(literalKey);
+  const real = [...subject.ids].some((id) => id !== literalKey && wanted.ids.has(id));
+  const bySize = subject.base === wanted.base && subject.size !== null && subject.size === wanted.size;
+  return `path=${literal ? '命中' : '不等'}`
+    + ` realpath=${real ? '命中' : '不等'}`
+    + ` basename+size=${bySize ? '命中' : `不等(${subject.base}/${subject.size} vs ${wanted.base}/${wanted.size})`}`;
+}
 
 const probe = {
   events: [],
-  /** path -> 'delete-before-open' | 'error-after-chunk' */
+  /** 字面路径 -> 'delete-before-open' | 'error-after-chunk' …（键按同一性匹配，不按字符串相等） */
   faults: new Map(),
   reset() {
     this.events.length = 0;
   },
   contentOpsFor(target) {
-    const key = normPath(target);
-    return this.events.filter((e) => e.op !== 'statSync' && normPath(e.path) === key);
+    const wanted = describePath(target);
+    return this.events.filter((e) => e.op !== 'statSync' && matchLayer(e.ident, wanted));
   },
   syncStatCount() {
     return this.events.filter((e) => e.op === 'statSync').length;
   },
+  /** 断言失败时的现场：目标是哪个真实文件、这段时间到底记录了谁、哪一层比较没命中。 */
+  diagnose(target) {
+    const wanted = describePath(target);
+    const content = this.events.filter((e) => e.op !== 'statSync');
+    const real = realpathOrNull(wanted.abs) || '（取不到）';
+    if (content.length === 0) {
+      return `\n      目标 ${wanted.abs}（realpath=${real}）；这段时间内一条内容打开记录都没有`;
+    }
+    const seen = content
+      .map((e) => `${e.op}(${e.path}) → ${matchLayer(e.ident, wanted) || '不命中'}; ${layerVerdicts(e.ident, wanted)}`)
+      .join('\n        ');
+    return `\n      目标 ${wanted.abs}（realpath=${real}）；这段时间记录到：\n        ${seen}`;
+  },
 };
 
-function normPath(p) {
-  const resolved = path.resolve(String(p));
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+function recordEvent(op, target, extra) {
+  const raw = typeof target === 'string' ? target : String(target);
+  probe.events.push({ op, path: raw, ident: describePath(raw), ...extra });
+}
+
+function takeFault(target) {
+  if (!target) return null;
+  const wanted = describePath(target);
+  for (const [key, kind] of probe.faults) {
+    if (matchLayer(describePath(key), wanted)) {
+      probe.faults.delete(key);
+      return kind;
+    }
+  }
+  return null;
 }
 
 function applyFault(target) {
   if (!target) return null;
-  const kind = probe.faults.get(target);
+  const kind = takeFault(target);
   if (!kind) return null;
-  probe.faults.delete(target);
   if (kind === 'delete-before-open') {
     try {
       fs.unlinkSync(target);
@@ -86,7 +190,7 @@ function applyFault(target) {
   return kind;
 }
 
-fs.createReadStream = function patchedCreateReadStream(target, options) {
+const patchedCreateReadStream = function patchedCreateReadStream(target, options) {
   const file = typeof target === 'string' ? target : null;
   const fault = applyFault(file);
   if (fault === 'error-after-chunk') {
@@ -96,32 +200,53 @@ fs.createReadStream = function patchedCreateReadStream(target, options) {
         this.destroy(new Error('injected read failure'));
       },
     });
-    probe.events.push({ op: 'createReadStream', path: file, stream, fault });
+    recordEvent('createReadStream', file, { stream, fault });
     return stream;
   }
   const stream = realCreateReadStream.call(fs, target, options);
-  probe.events.push({ op: 'createReadStream', path: file ?? String(target), stream });
+  recordEvent('createReadStream', file ?? target, { stream });
   return stream;
 };
+fs.createReadStream = patchedCreateReadStream;
 
-fsp.readFile = function patchedReadFile(target, options) {
+const patchedReadFile = function patchedReadFile(target, options) {
   const file = typeof target === 'string' ? target : null;
   applyFault(file);
-  probe.events.push({ op: 'readFile', path: file ?? String(target) });
+  recordEvent('readFile', file ?? target);
   return realReadFile.call(fsp, target, options);
 };
+fsp.readFile = patchedReadFile;
 
-fsp.open = function patchedOpen(target, ...rest) {
+const patchedOpen = function patchedOpen(target, ...rest) {
   const file = typeof target === 'string' ? target : null;
   applyFault(file);
-  probe.events.push({ op: 'open', path: file ?? String(target) });
+  recordEvent('open', file ?? target);
   return realOpen.call(fsp, target, ...rest);
 };
+fsp.open = patchedOpen;
 
-fs.statSync = function patchedStatSync(target, options) {
+const patchedStatSync = function patchedStatSync(target, options) {
   probe.events.push({ op: 'statSync', path: typeof target === 'string' ? target : String(target) });
   return realStatSync.call(fs, target, options);
 };
+fs.statSync = patchedStatSync;
+
+/*
+ * 补丁自检：如果 runner 上 node:fs 的命名空间属性不可写（或者哪天有人把 fs 换成代理），
+ * 后面每条用例都会以「没打开过内容」的假象红，看不出是补丁没生效还是路径对不上。
+ * 这里先确认四个入口真的被换掉了，不成立就立刻失败并指名道姓。
+ */
+for (const [name, actual, expected] of [
+  ['fs.createReadStream', fs.createReadStream, patchedCreateReadStream],
+  ['fs.promises.readFile', fs.promises.readFile, patchedReadFile],
+  ['fs.promises.open', fs.promises.open, patchedOpen],
+  ['fs.statSync', fs.statSync, patchedStatSync],
+]) {
+  if (actual !== expected) {
+    console.log(`PROBE-PATCH-FAILED ${name}`);
+    process.exit(1);
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* 夹具                                                                */
@@ -435,7 +560,7 @@ await t('会话图片 GET：流式返回完整内容，头保持', async () => {
   assert.equal(
     ops.filter((e) => e.op === 'createReadStream').length,
     1,
-    `GET 必须打开一条内容流（实际内容打开调用：${ops.map((e) => e.op).join(',') || '无'}）`,
+    `GET 必须打开一条内容流（实际内容打开调用：${ops.map((e) => e.op).join(',') || '无'}）${probe.diagnose(bigPicPath)}`,
   );
   assert.equal(
     ops.filter((e) => e.op === 'readFile' || e.op === 'open').length,
@@ -487,7 +612,7 @@ await t('卡片非 HTML 资源 GET：流式 + CSP/令牌头保持', async () => 
   assert.equal(
     ops.filter((e) => e.op === 'createReadStream').length,
     1,
-    `卡片资源 GET 必须走流（实际：${ops.map((e) => e.op).join(',') || '无'}）`,
+    `卡片资源 GET 必须走流（实际：${ops.map((e) => e.op).join(',') || '无'}）${probe.diagnose(target)}`,
   );
   assert.equal(ops.filter((e) => e.op === 'readFile' || e.op === 'open').length, 0, '卡片资源 GET 不应整文件缓冲');
 });
@@ -532,7 +657,7 @@ await t('卡片 HTML：GET/HEAD 仍完整读取、注入 runtime、源版本按�
   const ops = probe.contentOpsFor(target);
   assert.ok(
     ops.some((e) => e.op === 'readFile'),
-    'HTML 需要注入与源版本，必须完整读取（不能为了流式省略注入）',
+    `HTML 需要注入与源版本，必须完整读取（不能为了流式省略注入）${probe.diagnose(target)}`,
   );
   assert.equal(ops.filter((e) => e.op === 'createReadStream').length, 0, 'HTML 不能被当普通静态流直接发出');
 });
@@ -560,7 +685,7 @@ await t('静态文件 GET：流式返回，无同步 stat', async () => {
   assert.equal(
     ops.filter((e) => e.op === 'createReadStream').length,
     1,
-    `静态 GET 必须走流（实际：${ops.map((e) => e.op).join(',') || '无'}）`,
+    `静态 GET 必须走流（实际：${ops.map((e) => e.op).join(',') || '无'}）${probe.diagnose(target)}`,
   );
   assert.equal(ops.filter((e) => e.op === 'readFile' || e.op === 'open').length, 0, '静态 GET 不应整文件缓冲');
   assert.equal(probe.syncStatCount(), 0, '静态响应不应再调用同步 stat');
@@ -627,7 +752,7 @@ await t('客户端中途断开：读取流被销毁并关闭 fd，网关继续�
   const streamEvent = probe
     .contentOpsFor(bigPicPath)
     .find((e) => e.op === 'createReadStream');
-  assert.ok(streamEvent, '夹具：GET 应打开内容流');
+  assert.ok(streamEvent, `夹具：GET 应打开内容流${probe.diagnose(bigPicPath)}`);
   const stream = streamEvent.stream;
   const closed = await waitFor(() => stream.destroyed && stream.closed);
   assert.equal(closed, true, `客户端断开后读取流必须销毁并关闭 fd（destroyed=${stream.destroyed}, closed=${stream.closed}）`);
@@ -688,7 +813,7 @@ await t('零字节文件 GET：200、content-length: 0、空正文，流被销�
   assert.equal(res.body.length, 0, '零字节文件不能有正文');
 
   const streamEvent = probe.contentOpsFor(zeroPath).find((e) => e.op === 'createReadStream');
-  assert.ok(streamEvent, '仍要先打开文件，才能区分可读的空文件与打不开的 404');
+  assert.ok(streamEvent, `仍要先打开文件，才能区分可读的空文件与打不开的 404${probe.diagnose(zeroPath)}`);
   assert.equal(await waitFor(() => streamEvent.stream.destroyed), true, '空文件响应后读取流必须销毁（fd 不能留着）');
   assert.equal(streamEvent.stream.bytesRead, 0, `空文件不应读取正文（实际读了 ${streamEvent.stream.bytesRead} 字节）`);
 });
@@ -705,7 +830,7 @@ await t('stat 时 0 字节、打开前增长：不发正文，流被销毁', asy
   assert.equal(body.length, 0, `content-length: 0 的响应不能发出任何正文字节（实际 ${body.length}）`);
 
   const streamEvent = probe.contentOpsFor(zeroGrowPath).find((e) => e.op === 'createReadStream');
-  assert.ok(streamEvent, '夹具：应先打开文件确认可读');
+  assert.ok(streamEvent, `夹具：应先打开文件确认可读${probe.diagnose(zeroGrowPath)}`);
   assert.equal(await waitFor(() => streamEvent.stream.destroyed), true, '零字节响应必须销毁读取流');
   assert.equal(
     streamEvent.stream.bytesRead,

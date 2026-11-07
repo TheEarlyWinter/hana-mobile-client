@@ -497,7 +497,22 @@ function expectSuccess(res) {
 
 function expectFailure(res, reason) {
   assert.notEqual(res.status, 0, `应当失败，实际退出码 ${res.status}\n${tail(res.output)}`);
-  if (reason) assert.match(res.output, reason, `失败原因不对：\n${tail(res.output)}`);
+  if (reason) {
+    assert.match(
+      res.output,
+      reason,
+      `失败原因不对：${encodingHint(res.output)}\n${tail(res.output)}`,
+    );
+  }
+}
+
+/* 子进程把中文写丢了（控制台代码页不是 UTF-8，如 runner 的 CP 437）时，整段中文会变成「?」，
+ * 任何中文断言都永远匹配不到。这种时候不能说成「文案变了」：失败信息里直接点名编码丢了。 */
+function encodingHint(output) {
+  const runs = String(output).match(/\?{2,}/g);
+  return runs && runs.length >= 2
+    ? '（输出里出现连续问号：子进程的中文在写出时已丢，先查控制台代码页与输出编码，不是文案变了）'
+    : '';
 }
 
 function expectDownloadUntouched(before, after, label) {
