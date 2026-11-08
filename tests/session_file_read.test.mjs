@@ -118,7 +118,7 @@ const hanaHome = path.join(tmpRoot, 'hana-home');
 const sessionFiles = path.join(hanaHome, 'session-files');
 const uploadsDir = path.join(hanaHome, 'uploads');
 const attachmentsDir = path.join(hanaHome, 'attachments');
-const workRoot = path.join(tmpRoot, 'work', 'OH-WorkSpace');
+const workRoot = path.join(tmpRoot, 'work', 'workspace');
 const outsideDir = path.join(tmpRoot, 'outside');
 
 await fsp.mkdir(sessionFiles, { recursive: true });
@@ -203,7 +203,7 @@ const upstream = http.createServer((req, res) => {
       ok: true,
       studioId: 'studio-1',
       workspaces: [
-        { mountId: 'mount-work', label: 'OH-WorkSpace', nativeRootPath: workRoot, rootAvailable: true },
+        { mountId: 'mount-work', label: 'workspace', nativeRootPath: workRoot, rootAvailable: true },
         // 不可用的挂载点不能当作可读根
         { mountId: 'mount-gone', label: '离线盘', nativeRootPath: path.join(tmpRoot, 'gone'), rootAvailable: false },
       ],
@@ -424,7 +424,7 @@ t('未登录：没有 Cookie 仍 401（这条路由不是匿名读）', async ()
 /** 真机上的条目形状：工作区映射失败时仍有 filePath。 */
 const WORK_FILE = {
   fileId: 'sf_work',
-  filePath: 'C:/work/OH-WorkSpace/out/report.xlsx',
+  filePath: 'C:/work/workspace/out/report.xlsx',
   label: 'report.xlsx',
   ext: 'xlsx',
 };
@@ -467,7 +467,7 @@ t('forFile：映射不到工作区但有 filePath → readUrl 走 /gw/file，下
 
 t('forFile：映射成功 → 读和下载都用工作区地址（老行为不变）', async () => {
   const urls = makeFileUrls({
-    roots: [{ mountId: 'mount-1', label: 'OH-WorkSpace', nativeRootPath: 'C:/work/OH-WorkSpace' }],
+    roots: [{ mountId: 'mount-1', label: 'workspace', nativeRootPath: 'C:/work/workspace' }],
   });
   const { readUrl, downloadUrl } = await urls.forFile(WORK_FILE);
   assert.ok(downloadUrl?.startsWith(WORKSPACE_CONTENT), `下载地址必须是壳认的，实际 ${downloadUrl}`);

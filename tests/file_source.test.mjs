@@ -25,9 +25,9 @@ function ok(name, fn) {
 }
 
 const ROOTS = [
-  { mountId: 'mount_work', path: 'C:\\Users\\Me\\Desktop\\OH-WorkSpace' },
-  { mountId: 'mount_nested', path: 'C:\\Users\\Me\\Desktop\\OH-WorkSpace\\hana-mobile' },
-  { mountId: 'mount_d', path: 'D:\\111\\工作总结' },
+  { mountId: 'mount_work', path: 'C:\\Users\\Me\\Desktop\\workspace' },
+  { mountId: 'mount_nested', path: 'C:\\Users\\Me\\Desktop\\workspace\\hana-mobile' },
+  { mountId: 'mount_d', path: 'D:\\work\\报表' },
 ];
 
 ok('normalizePath：反斜杠转正斜杠并去掉尾部斜杠', () => {
@@ -38,38 +38,38 @@ ok('normalizePath：反斜杠转正斜杠并去掉尾部斜杠', () => {
 });
 
 ok('matchWorkspaceRoot：根目录下的文件', () => {
-  const hit = matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\OH-WorkSpace\\mobile_preview_test.docx', ROOTS);
+  const hit = matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\workspace\\mobile_preview_test.docx', ROOTS);
   assert.deepEqual(hit, { mountId: 'mount_work', subdir: '', name: 'mobile_preview_test.docx' });
 });
 
 ok('matchWorkspaceRoot：子目录里的文件保留 subdir', () => {
-  const hit = matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\OH-WorkSpace\\docs\\a\\报告.docx', ROOTS);
+  const hit = matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\workspace\\docs\\a\\报告.docx', ROOTS);
   assert.deepEqual(hit, { mountId: 'mount_work', subdir: 'docs/a', name: '报告.docx' });
 });
 
 ok('matchWorkspaceRoot：嵌套工作区取最长前缀，不被外层吞掉', () => {
-  const hit = matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\OH-WorkSpace\\hana-mobile\\web\\app.js', ROOTS);
+  const hit = matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\workspace\\hana-mobile\\web\\app.js', ROOTS);
   assert.deepEqual(hit, { mountId: 'mount_nested', subdir: 'web', name: 'app.js' });
 });
 
 ok('matchWorkspaceRoot：Windows 路径大小写不敏感', () => {
-  const hit = matchWorkspaceRoot('c:\\users\\me\\desktop\\oh-workspace\\x.md', ROOTS);
+  const hit = matchWorkspaceRoot('c:\\users\\me\\desktop\\workspace\\x.md', ROOTS);
   assert.equal(hit?.mountId, 'mount_work');
   assert.equal(hit?.name, 'x.md');
 });
 
 ok('matchWorkspaceRoot：不同盘符不误判', () => {
-  assert.equal(matchWorkspaceRoot('E:\\111\\工作总结\\a.docx', ROOTS), null);
-  assert.equal(matchWorkspaceRoot('D:\\111\\工作总结\\年报.docx', ROOTS)?.mountId, 'mount_d');
+  assert.equal(matchWorkspaceRoot('E:\\work\\报表\\a.docx', ROOTS), null);
+  assert.equal(matchWorkspaceRoot('D:\\work\\报表\\年报.docx', ROOTS)?.mountId, 'mount_d');
 });
 
 ok('matchWorkspaceRoot：只是前缀相同、不构成目录关系的不算', () => {
-  // ...OH-WorkSpace-other 不能命中 ...OH-WorkSpace
-  assert.equal(matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\OH-WorkSpace-other\\a.txt', ROOTS), null);
+  // ...workspace-other 不能命中 ...workspace
+  assert.equal(matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\workspace-other\\a.txt', ROOTS), null);
 });
 
 ok('matchWorkspaceRoot：根目录本身、空路径、坏输入都返回 null', () => {
-  assert.equal(matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\OH-WorkSpace', ROOTS), null);
+  assert.equal(matchWorkspaceRoot('C:\\Users\\Me\\Desktop\\workspace', ROOTS), null);
   assert.equal(matchWorkspaceRoot('', ROOTS), null);
   assert.equal(matchWorkspaceRoot('C:\\a\\b', null), null);
   assert.equal(matchWorkspaceRoot('C:\\a\\b', [{ path: 'C:\\a' }]), null); // 没有 mountId
@@ -92,7 +92,7 @@ ok('buildWorkspaceContentUrl：缺 mountId 或 name 返回 null', () => {
 
 ok('workspaceUrlForFile：工作区命中就给出 content 地址', () => {
   const url = workspaceUrlForFile(
-    { filePath: 'C:\\Users\\Me\\Desktop\\OH-WorkSpace\\mobile_preview_test.docx', fileId: 'sf_1' },
+    { filePath: 'C:\\Users\\Me\\Desktop\\workspace\\mobile_preview_test.docx', fileId: 'sf_1' },
     ROOTS,
     'hakimi',
   );
@@ -108,18 +108,18 @@ ok('workspaceUrlForFile：工作区外的文件返回 null（调用方退回资�
 });
 
 ok('matchWorkspaceByLabel：按工作区目录名反推相对路径', () => {
-  const rel = matchWorkspaceByLabel('C:\\Users\\Me\\Desktop\\OH-WorkSpace\\mobile_preview_test.docx', 'OH-WorkSpace');
+  const rel = matchWorkspaceByLabel('C:\\Users\\Me\\Desktop\\workspace\\mobile_preview_test.docx', 'workspace');
   assert.deepEqual(rel, { subdir: '', name: 'mobile_preview_test.docx' });
 });
 
 ok('matchWorkspaceByLabel：子目录与大小写', () => {
-  const rel = matchWorkspaceByLabel('c:\\users\\me\\desktop\\oh-workspace\\docs\\a\\b.docx', 'OH-WorkSpace');
+  const rel = matchWorkspaceByLabel('c:\\users\\me\\desktop\\workspace\\docs\\a\\b.docx', 'workspace');
   assert.deepEqual(rel, { subdir: 'docs/a', name: 'b.docx' });
 });
 
 ok('matchWorkspaceByLabel：路径里没这个目录就返回 null，不瞎猜', () => {
-  assert.equal(matchWorkspaceByLabel('C:\\Temp\\x.docx', 'OH-WorkSpace'), null);
-  assert.equal(matchWorkspaceByLabel('', 'OH-WorkSpace'), null);
+  assert.equal(matchWorkspaceByLabel('C:\\Temp\\x.docx', 'workspace'), null);
+  assert.equal(matchWorkspaceByLabel('', 'workspace'), null);
   assert.equal(matchWorkspaceByLabel('C:\\a\\b.docx', 'a/b'), null);
 });
 

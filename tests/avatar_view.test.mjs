@@ -162,7 +162,7 @@ await t('initialOf: 英文首字母自动大写', () => {
 
 await t('initialOf: 中文与非字母保留首字符', () => {
   assert.equal(initialOf('小花'), '小');
-  assert.equal(initialOf('催花清雨'), '催');
+  assert.equal(initialOf('测试用户'), '测');
   assert.equal(initialOf('123'), '1');
   assert.equal(initialOf('★星'), '★');
 });

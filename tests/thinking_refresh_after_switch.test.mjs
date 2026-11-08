@@ -2,7 +2,7 @@
  *
  * 「切换模型之后，思考级别必须跟着换」的回归测试。
  *
- * 起因（某 Android 13 手机真机复现）：
+ * 起因（真机复现，某 Android 13 机型）：
  *   设置面板里先选 Gemini 3.8 Flash（宿主档位 off/medium/high，默认 high），
  *   再点 GPT-5.6-Luna（宿主档位 low/medium/high/max，默认 max）。
  *   模型切过去了，但思考级别还是 Gemini 那三格，而且三格全灰。

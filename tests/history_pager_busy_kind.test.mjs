@@ -2,7 +2,7 @@
  *
  * 单元 A：生成中放开「加载更早」——canLoad 带 kind（'open' | 'older'）那一层。
  *
- * 覆盖（历史契约（生成中翻页）第 2.1 / 2.2 / 3 节）：
+ * 覆盖（契约 docs/plans/2026-11-06-history-during-stream-contract.md 第 2.1 / 2.2 / 3 节）：
  * 1. canLoad('older') 放行时生成中能取到更早一页；canLoad('open') 为 false 时首屏仍被拦；
  * 2. 旧的无参 canLoad 夹具（() => !busy / () => false）语义不变，两条路径照旧一起拦；
  * 3. pager 传给 canLoad 的 kind 永远是显式的 'open' / 'older'，缺省不会变成 undefined；
@@ -439,7 +439,7 @@ h.setFetch(async (url) => {
     return h.jsonRes({
       agents: [{ id: 'agent-1', name: 'Hana', isPrimary: true }],
       userName: 'qa',
-      homeFolder: 'C:/work/OH-WorkSpace',
+      homeFolder: 'C:/work/workspace',
     });
   }
   if (pathname === '/api/sessions/messages') {

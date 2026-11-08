@@ -436,7 +436,7 @@ await t('row: Code 会话的 meta 显示 Code 标识，cwd 用 basename', () => 
     title: 'Code 会话',
     agentName: 'DeepSeek',
     messageCount: 12,
-    cwd: 'C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile',
+    cwd: 'C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile',
     workspaceMountId: 'mount_abc',
     workspaceLabel: 'Hana Mobile Workspace',
     modified: fakeNow,

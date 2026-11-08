@@ -628,9 +628,9 @@ test('关闭动画期间重开：不叠加根节点，旧的那份立刻让位',
   ctx.sheet.close('backdrop');                 // 进 closing，节点还在文档里
   assert.equal(rootOf(ctx.mount).dataset.state, 'closing', '先在 closing 态');
 
-  await openSettled(ctx, makeTarget({ taskId: 'task-2', name: '催花清雨' }));
+  await openSettled(ctx, makeTarget({ taskId: 'task-2', name: '测试用户' }));
   assert.equal(ctx.mount.querySelectorAll('.subagent-sheet').length, 1, '只应剩一份根节点');
-  assert.equal(textOf(partOf(ctx.mount, '.ss-name')), '催花清雨', '应该是新打开的那份');
+  assert.equal(textOf(partOf(ctx.mount, '.ss-name')), '测试用户', '应该是新打开的那份');
 
   // 旧那份排着的收尾定时器已被清掉，不会再跑来拆新节点
   ctx.timers.runAll();

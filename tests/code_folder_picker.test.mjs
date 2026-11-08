@@ -172,7 +172,7 @@ await runCheck('只有会话历史目录时：列表带「最近」标签、提�
   // 手机经网关时宿主的真实回应：工作区在，但没有 nativeRootPath
   const picker = makePicker(mount, async () => ({
     workspaces: [{ mountId: 'm1', label: 'hana-mobile', rootAvailable: true }],
-    recent: [{ path: 'C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile' }],
+    recent: [{ path: 'C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile' }],
   }));
   const promise = picker.open();
   await h.settle();
@@ -186,7 +186,7 @@ await runCheck('只有会话历史目录时：列表带「最近」标签、提�
   assertIncludes(hint.textContent, '最近 Code 会话', '提示要说清楚这些目录的来源');
 
   itemOf(mount, 0).click();
-  assertEqual(await promise, 'C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile', '点一下就能选');
+  assertEqual(await promise, 'C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile', '点一下就能选');
 });
 
 await runCheck('工作区列表读失败但有历史目录：仍可选用，并说明降级', async () => {
@@ -435,7 +435,7 @@ await runCheck('对话框无障碍属性与中文 aria-label', async () => {
 });
 
 await runCheck('长路径中间省略，title 仍是全路径', async () => {
-  const longPath = 'C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile\\src\\renderer\\widgets';
+  const longPath = 'C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile\\src\\renderer\\widgets';
   assert(longPath.length > MAX_PATH_CHARS, '夹具路径必须超过上限');
 
   const mount = makeMount();
@@ -500,9 +500,9 @@ await runCheck('pickUsableRoots：远端拿不到路径时用最近会话的 cwd
       { mountId: 'm2', label: 'token', rootAvailable: true },
     ],
     recent: [
-      { path: 'C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile' },
-      { path: ' C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile ', label: '重复' },
-      { path: 'C:\\Users\\example\\Desktop\\OH-WorkSpace\\token' },
+      { path: 'C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile' },
+      { path: ' C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile ', label: '重复' },
+      { path: 'C:\\Users\\\\example\\Desktop\\workspace\\token' },
       { path: '' },
       { nope: 1 },
       'C:\\plain\\string',
@@ -513,8 +513,8 @@ await runCheck('pickUsableRoots：远端拿不到路径时用最近会话的 cwd
   assertEqual(
     picked.map((item) => item.path),
     [
-      'C:\\Users\\example\\Desktop\\OH-WorkSpace\\hana-mobile',
-      'C:\\Users\\example\\Desktop\\OH-WorkSpace\\token',
+      'C:\\Users\\\\example\\Desktop\\workspace\\hana-mobile',
+      'C:\\Users\\\\example\\Desktop\\workspace\\token',
       'C:\\plain\\string',
     ],
     '只留合法路径并去重（含纯字符串写法）',

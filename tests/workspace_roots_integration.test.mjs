@@ -102,7 +102,7 @@ const routes = {
   '/api/mobile/bootstrap': {
     agents: [{ id: 'agent-home', name: 'Hakimi', isPrimary: true }],
     userName: 'qa',
-    homeFolder: 'C:/work/OH-WorkSpace',
+    homeFolder: 'C:/work/workspace',
   },
   '/api/sessions': [],
   '/api/studio/workspaces': ROOTS_RESPONSE,

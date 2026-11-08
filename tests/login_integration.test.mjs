@@ -280,7 +280,7 @@ globalThis.fetch = async (url, init = {}) => {
     return jsonRes({
       agents: [{ id: 'agent-home', name: 'Hakimi', isPrimary: true }],
       userName: 'qa',
-      homeFolder: 'C:/work/OH-WorkSpace',
+      homeFolder: 'C:/work/workspace',
     });
   }
   if (path === '/api/sessions') {
@@ -571,7 +571,7 @@ await t('P0：登录 200 但 boot 未完成时，不能再登录/退出，只核
   gate.resolve(jsonRes({
     agents: [{ id: 'agent-home', name: 'Hakimi', isPrimary: true }],
     userName: 'qa',
-    homeFolder: 'C:/work/OH-WorkSpace',
+    homeFolder: 'C:/work/workspace',
   }));
   await waitFor(showList, '释放后应进主页');
   await settle(4);

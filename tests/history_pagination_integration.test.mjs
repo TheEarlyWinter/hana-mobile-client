@@ -646,7 +646,7 @@ globalThis.fetch = async (url, init = {}) => {
     return jsonRes({
       agents: [{ id: 'agent-home', name: 'Hakimi', isPrimary: true }],
       userName: 'qa',
-      homeFolder: 'C:/work/OH-WorkSpace',
+      homeFolder: 'C:/work/workspace',
     });
   }
   if (path === '/api/sessions') return jsonRes([]);

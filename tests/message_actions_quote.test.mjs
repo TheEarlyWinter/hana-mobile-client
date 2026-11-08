@@ -175,17 +175,17 @@ await t('plan：没有消息级作者时用 context 的 userName / agentName 兜
   const user = actionById(
     actionsForMessage({ id: '10', role: 'user', text: '问' }, {
       session: SESSION,
-      userName: '催花清雨',
+      userName: '测试用户',
       agentName: 'Hana',
     }),
     'quote',
   );
-  assert.equal(user.plan.author, '催花清雨');
+  assert.equal(user.plan.author, '测试用户');
 
   const assistant = actionById(
     actionsForMessage({ id: '11', role: 'assistant', text: '答' }, {
       session: SESSION,
-      userName: '催花清雨',
+      userName: '测试用户',
       agentName: 'Hana',
     }),
     'quote',

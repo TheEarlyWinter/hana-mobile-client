@@ -85,7 +85,7 @@ export function buildWorkspaceContentUrl({ mountId, agentId = '', subdir = '', n
  * 于是可以按「最后一个 /<label>/ 之后的部分」当相对路径。找不到就不猜。
  *
  * @param {string} filePath
- * @param {string} label  会话的 workspaceLabel（例如 OH-WorkSpace）
+ * @param {string} label  会话的 workspaceLabel（例如 工作区）
  * @returns {{subdir: string, name: string}|null}
  */
 export function matchWorkspaceByLabel(filePath, label) {

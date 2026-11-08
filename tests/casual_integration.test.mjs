@@ -42,7 +42,7 @@ h.setFetch(async (url, init = {}) => {
     return h.jsonRes({
       agents: [{ id: 'agent-1', name: 'Hana', isPrimary: true }],
       userName: 'qa',
-      homeFolder: 'C:/work/OH-WorkSpace',
+      homeFolder: 'C:/work/workspace',
     });
   }
   if (path === '/api/sessions') return h.jsonRes([]);

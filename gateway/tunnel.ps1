@@ -54,7 +54,7 @@ if (-not $VpsHost) { throw "缺少 vpsHost：在 $Config 里配，或用 -VpsHos
 if ($VpsPort -le 0) { $VpsPort = 22 }
 if (-not $VpsUser) { $VpsUser = 'root' }
 if ($RemotePort -le 0) { throw "缺少 remotePort（VPS 上给 cloudflared 用的本地端口）" }
-if (-not $KeyPath) { $KeyPath = Join-Path $env:USERPROFILE '.ssh\hana_vps' }
+if (-not $KeyPath) { $KeyPath = Join-Path $env:USERPROFILE '.ssh\hana_tunnel' }
 
 # ---------------------------------------------------------------------
 # 这些值会被拼进 run.cmd（cmd 会解释 & | < > ^ " % 和换行），先按白名单卡死。

@@ -41,8 +41,8 @@ async function t(name, fn) {
   }
 }
 
-const PATH_A = 'C:\\Users\\example\\.hanako\\agents\\hanako\\sessions\\a.jsonl';
-const PATH_B = 'C:\\Users\\example\\.hanako\\agents\\hanako\\sessions\\b.jsonl';
+const PATH_A = 'C:\\Users\\\\example\\.hanako\\agents\\hanako\\sessions\\a.jsonl';
+const PATH_B = 'C:\\Users\\\\example\\.hanako\\agents\\hanako\\sessions\\b.jsonl';
 
 const rowA = {
   sessionId: 'sess_a',

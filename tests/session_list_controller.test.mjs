@@ -86,20 +86,20 @@ function harness(overrides = {}) {
 
 const legacyRow = {
   sessionId: 'sess_legacy',
-  path: 'C:\\Users\\example\\.hanako\\agents\\hanako\\sessions\\legacy.jsonl',
+  path: 'C:\\Users\\\\example\\.hanako\\agents\\hanako\\sessions\\legacy.jsonl',
   title: '旧版会话',
   modified: 1000,
 };
 const homeRow = {
   sessionId: 'sess_home',
-  path: 'C:\\Users\\example\\.hanako\\agents\\hanako\\sessions\\home.jsonl',
+  path: 'C:\\Users\\\\example\\.hanako\\agents\\hanako\\sessions\\home.jsonl',
   namespace: 'home',
   title: '主页会话',
   modified: 2000,
 };
 const codeRow = {
   sessionId: 'sess_code',
-  path: 'C:\\Users\\example\\.hanako\\agents\\hanako\\sessions\\code.jsonl',
+  path: 'C:\\Users\\\\example\\.hanako\\agents\\hanako\\sessions\\code.jsonl',
   namespace: 'code',
   title: '代码会话',
   modified: 3000,

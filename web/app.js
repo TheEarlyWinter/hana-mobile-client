@@ -788,7 +788,7 @@ function updateHeroCompanion() {
 
   const wsEl = $('homeWorkspaceName');
   if (wsEl) {
-    wsEl.textContent = S.homeFolder || 'OH-WorkSpace';
+    wsEl.textContent = S.homeFolder || '工作区';
   }
 }
 

@@ -18,7 +18,7 @@ const h = createHarness();
 const state = {
   rootsFail: false,
   rootsCalls: 0,
-  roots: [{ mountId: 'mount-1', label: 'OH-WorkSpace', nativeRootPath: 'C:/work/OH-WorkSpace' }],
+  roots: [{ mountId: 'mount-1', label: 'workspace', nativeRootPath: 'C:/work/workspace' }],
   // 需要观察「请求在途时 reset / 切身份」的用例，把下一次取根挂在这里。
   rootsQueue: [],
 };
@@ -42,7 +42,7 @@ h.setFetch(async (url) => {
     return h.jsonRes({
       agents: [{ id: 'agent-1', name: 'Hana', isPrimary: true }],
       userName: 'qa',
-      homeFolder: 'C:/work/OH-WorkSpace',
+      homeFolder: 'C:/work/workspace',
     });
   }
   // 资源读地址：fetch 读，壳不拦；预览能不能打开就看这条能不能回。
@@ -145,7 +145,7 @@ await t('取根失败后允许重试，成功就给出两个地址', async () =>
   state.rootsFail = false;
   const file = {
     fileId: 'sf_2',
-    filePath: 'C:/work/OH-WorkSpace/out/report.docx',
+    filePath: 'C:/work/workspace/out/report.docx',
     label: 'report.docx',
     ext: 'docx',
   };
@@ -163,7 +163,7 @@ await t('取根失败后允许重试，成功就给出两个地址', async () =>
 await t('登录身份变化时作废工作区根缓存', async () => {
   const file = {
     fileId: 'sf_3',
-    filePath: 'C:/work/OH-WorkSpace/out/report.docx',
+    filePath: 'C:/work/workspace/out/report.docx',
     label: 'report.docx',
     ext: 'docx',
   };
@@ -173,13 +173,13 @@ await t('登录身份变化时作废工作区根缓存', async () => {
 
   // 换一个人登录：上一个人的根不能继续用
   S.principal = { id: 'user-2' };
-  state.roots = [{ mountId: 'mount-2', label: '别人的工作站', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-2', label: '别人的工作站', nativeRootPath: 'C:/work/workspace' }];
   const { downloadUrl } = await hana.fileUrls.forFile(file);
   assert.equal(state.rootsCalls, before + 1, '身份变化必须重新取根');
   assert.ok(downloadUrl.includes('mountId=mount-2'), `必须用新身份的根，实际 ${downloadUrl}`);
 
   S.principal = { id: 'user-1' };
-  state.roots = [{ mountId: 'mount-1', label: 'OH-WorkSpace', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-1', label: 'workspace', nativeRootPath: 'C:/work/workspace' }];
   hana.resetFileRoots();
 });
 
@@ -188,7 +188,7 @@ await t('登录身份变化时作废工作区根缓存', async () => {
 
 const epochFile = {
   fileId: 'sf_epoch',
-  filePath: 'C:/work/OH-WorkSpace/out/report.docx',
+  filePath: 'C:/work/workspace/out/report.docx',
   label: 'report.docx',
   ext: 'docx',
 };
@@ -206,7 +206,7 @@ await t('取根途中 reset：旧请求成功不能覆盖新缓存', async () =>
   await h.waitFor(() => state.rootsCalls === before + 1, 'A 的取根请求应已发出');
 
   hana.resetFileRoots();          // 退出登录 / 换身份：代次 +1
-  state.roots = [{ mountId: 'mount-2', label: '新根', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-2', label: '新根', nativeRootPath: 'C:/work/workspace' }];
   const pendingB = hana.fileUrls.forFile(epochFile);
   await h.waitFor(() => state.rootsCalls === before + 2, 'B 的取根请求应已发出');
   const b = await pendingB;
@@ -216,7 +216,7 @@ await t('取根途中 reset：旧请求成功不能覆盖新缓存', async () =>
   stale.resolve({
     ok: true,
     studioId: 'studio-1',
-    workspaces: [{ mountId: 'mount-1', label: '旧根', nativeRootPath: 'C:/work/OH-WorkSpace' }],
+    workspaces: [{ mountId: 'mount-1', label: '旧根', nativeRootPath: 'C:/work/workspace' }],
   });
   await pendingA;
 
@@ -239,7 +239,7 @@ await t('取根途中 reset：旧请求失败不能写进新缓存或错误', as
   await h.waitFor(() => state.rootsCalls === before + 1, 'A 的取根请求应已发出');
 
   hana.resetFileRoots();
-  state.roots = [{ mountId: 'mount-2', label: '新根', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-2', label: '新根', nativeRootPath: 'C:/work/workspace' }];
   const pendingB = hana.fileUrls.forFile(epochFile);
   await h.waitFor(() => state.rootsCalls === before + 2, 'B 的取根请求应已发出');
   await pendingB;
@@ -269,11 +269,11 @@ await t('reset 后没有新请求：旧成功也不能落进缓存', async () =>
   stale.resolve({
     ok: true,
     studioId: 'studio-1',
-    workspaces: [{ mountId: 'mount-stale', label: '旧根', nativeRootPath: 'C:/work/OH-WorkSpace' }],
+    workspaces: [{ mountId: 'mount-stale', label: '旧根', nativeRootPath: 'C:/work/workspace' }],
   });
   await pending;
 
-  state.roots = [{ mountId: 'mount-fresh', label: '新根', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-fresh', label: '新根', nativeRootPath: 'C:/work/workspace' }];
   const fresh = await hana.fileUrls.forFile(epochFile);
   assert.equal(state.rootsCalls, before + 2, 'reset 前的旧成功不能写缓存：下一次必须重新取根');
   assert.ok(fresh.downloadUrl?.includes('mountId=mount-fresh'), `必须用重新取到的根，实际 ${fresh.downloadUrl}`);
@@ -292,14 +292,14 @@ await t('取根途中换身份：旧身份的成功结果不能写进当前缓�
   await h.waitFor(() => state.rootsCalls === before + 1, 'A 的取根请求应已发出');
 
   S.principal = { id: 'user-2' }; // 没走 reset，但 owner 已经换了
-  state.roots = [{ mountId: 'mount-2', label: '别人的根', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-2', label: '别人的根', nativeRootPath: 'C:/work/workspace' }];
   const b = await hana.fileUrls.forFile(epochFile);
   assert.ok(b.downloadUrl?.includes('mountId=mount-2'), `B 必须用新身份的根，实际 ${b.downloadUrl}`);
 
   stale.resolve({
     ok: true,
     studioId: 'studio-1',
-    workspaces: [{ mountId: 'mount-1', label: '旧身份的根', nativeRootPath: 'C:/work/OH-WorkSpace' }],
+    workspaces: [{ mountId: 'mount-1', label: '旧身份的根', nativeRootPath: 'C:/work/workspace' }],
   });
   await pendingA;
 
@@ -318,7 +318,7 @@ await t('等根期间切会话：旧文件不能用新会话的身份映射', as
   state.rootsQueue.length = 0;
   state.rootsFail = true;          // 根取不到：只剩「按会话自带 mountId + 目录名反推」这条路
 
-  const file = { fileId: 'sf_switch', filePath: 'C:/work/OH-WorkSpace/out/old.txt', label: 'old.txt', ext: 'txt' };
+  const file = { fileId: 'sf_switch', filePath: 'C:/work/workspace/out/old.txt', label: 'old.txt', ext: 'txt' };
   const gate = deferRoots();
   const before = state.rootsCalls;
   const pending = hana.fileUrls.downloadUrlFor(file);
@@ -330,7 +330,7 @@ await t('等根期间切会话：旧文件不能用新会话的身份映射', as
     sessionId: 's-new',
     agentId: 'agent-1',
     workspaceMountId: 'mount-new',
-    workspaceLabel: 'OH-WorkSpace',
+    workspaceLabel: 'workspace',
   };
   gate.reject(new Error('boom'));
   const url = await pending;
@@ -343,7 +343,7 @@ await t('等根期间切会话：旧文件不能用新会话的身份映射', as
     sessionId: 's-new2',
     agentId: 'agent-1',
     workspaceMountId: 'mount-new2',
-    workspaceLabel: 'OH-WorkSpace',
+    workspaceLabel: 'workspace',
   };
   const gate2 = deferRoots();
   const pending2 = hana.fileUrls.downloadUrlFor(file);
@@ -366,7 +366,7 @@ await t('A 已有缓存、隐式换 B：B 在途时第二次调用不能拿 A �
   hana.resetFileRoots();
   state.rootsFail = false;
   state.rootsQueue.length = 0;
-  state.roots = [{ mountId: 'mount-A', label: 'A 的根', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-A', label: 'A 的根', nativeRootPath: 'C:/work/workspace' }];
 
   const cached = await hana.fileUrls.ensureRoots();
   assert.equal(cached[0].mountId, 'mount-A', '夹具：A 的根应已缓存');
@@ -381,7 +381,7 @@ await t('A 已有缓存、隐式换 B：B 在途时第二次调用不能拿 A �
   gateB.resolve({
     ok: true,
     studioId: 'studio-1',
-    workspaces: [{ mountId: 'mount-B', label: 'B 的根', nativeRootPath: 'C:/work/OH-WorkSpace' }],
+    workspaces: [{ mountId: 'mount-B', label: 'B 的根', nativeRootPath: 'C:/work/workspace' }],
   });
   const [b1, b2] = await Promise.all([pendingB1, pendingB2]);
   assert.equal(b1[0].mountId, 'mount-B', 'B 的第一次请求应拿到 B 的根');
@@ -414,11 +414,11 @@ await t('A1 → B1 → A2：迟到的旧 A1 成功不能覆盖 A2 的缓存', as
   const pendingA2 = hana.fileUrls.ensureRoots();
   await h.waitFor(() => state.rootsCalls === calls + 3, 'A2 的取根应已发出');
 
-  gateA2.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-A2', label: 'A2', nativeRootPath: 'C:/work/OH-WorkSpace' }] });
+  gateA2.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-A2', label: 'A2', nativeRootPath: 'C:/work/workspace' }] });
   await pendingA2;
-  gateB1.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-B1', label: 'B1', nativeRootPath: 'C:/work/OH-WorkSpace' }] });
+  gateB1.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-B1', label: 'B1', nativeRootPath: 'C:/work/workspace' }] });
   await pendingB1;
-  gateA1.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-A1', label: 'A1', nativeRootPath: 'C:/work/OH-WorkSpace' }] });
+  gateA1.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-A1', label: 'A1', nativeRootPath: 'C:/work/workspace' }] });
   await pendingA1;
 
   const current = await hana.fileUrls.ensureRoots();
@@ -433,7 +433,7 @@ await t('A1 → B1 → A2：迟到的旧 A1 失败不能覆盖 A2 的缓存或�
   hana.resetFileRoots();
   state.rootsFail = false;
   state.rootsQueue.length = 0;
-  state.roots = [{ mountId: 'mount-fallback', label: '兜底', nativeRootPath: 'C:/work/OH-WorkSpace' }];
+  state.roots = [{ mountId: 'mount-fallback', label: '兜底', nativeRootPath: 'C:/work/workspace' }];
 
   const calls = state.rootsCalls;
   const gateA1 = deferRoots();
@@ -450,9 +450,9 @@ await t('A1 → B1 → A2：迟到的旧 A1 失败不能覆盖 A2 的缓存或�
   const pendingA2 = hana.fileUrls.ensureRoots();
   await h.waitFor(() => state.rootsCalls === calls + 3, 'A2 的取根应已发出');
 
-  gateA2.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-A2', label: 'A2', nativeRootPath: 'C:/work/OH-WorkSpace' }] });
+  gateA2.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-A2', label: 'A2', nativeRootPath: 'C:/work/workspace' }] });
   await pendingA2;
-  gateB1.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-B1', label: 'B1', nativeRootPath: 'C:/work/OH-WorkSpace' }] });
+  gateB1.resolve({ ok: true, studioId: 'studio-1', workspaces: [{ mountId: 'mount-B1', label: 'B1', nativeRootPath: 'C:/work/workspace' }] });
   await pendingB1;
   gateA1.reject(new Error('A1 旧失败'));
   await assert.rejects(pendingA1, /A1 旧失败/, '旧调用方仍应拿到自己的失败');
@@ -525,7 +525,7 @@ await t('文件卡（有工作区路径）：预览和下载入口都在', async
     block: {
       type: 'file',
       fileId: 'sf_10',
-      filePath: 'C:/work/OH-WorkSpace/out/report.docx',
+      filePath: 'C:/work/workspace/out/report.docx',
       label: 'report.docx',
       ext: 'docx',
       sessionId: 's-dl',

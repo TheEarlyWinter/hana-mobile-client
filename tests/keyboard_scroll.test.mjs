@@ -4,7 +4,7 @@
  * nearBottom()（clientHeight）判断。视图变矮之后底部间距变大，本来贴底的那一屏不再
  * 算「贴底」，于是最新内容留在屏幕外。
  *
- * 真机（某 Android 13 手机的 WebView）还有第二条路径：键盘弹起时布局视口直接缩小
+ * 真机（Android 13 WebView）还有第二条路径：键盘弹起时布局视口直接缩小
  * （adjustResize），documentElement.clientHeight 与 visualViewport.height 一起变小，
  * adjust() 里的 inset 恒为 0，于是「inset > 0 才滚」这个前置条件直接把滚动短路掉——
  * 布局确实变矮了，内容就被裁在下面。所以贴底状态改成持续跟踪（滚动事件刷新），
@@ -30,7 +30,7 @@ h.setFetch(async (url) => {
     return h.jsonRes({
       agents: [{ id: 'agent-1', name: 'Hana', isPrimary: true }],
       userName: 'qa',
-      homeFolder: 'C:/work/OH-WorkSpace',
+      homeFolder: 'C:/work/workspace',
     });
   }
   if (path === '/api/sessions/messages') return h.jsonRes({ messages: [], blocks: [], hasMore: false });

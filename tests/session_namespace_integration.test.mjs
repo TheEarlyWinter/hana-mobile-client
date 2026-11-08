@@ -265,7 +265,7 @@ const HOME_ROWS = [
     path: 'C:/Users/qa/.hana/sessions/home-1',
     sessionId: 'sess-home-1',
     namespace: 'home',
-    cwd: 'C:/work/OH-WorkSpace',
+    cwd: 'C:/work/workspace',
     agentId: 'agent-home',
     title: '首页会话一',
     messageCount: 4,
@@ -275,7 +275,7 @@ const HOME_ROWS = [
     path: 'C:/Users/qa/.hana/sessions/home-2',
     sessionId: 'sess-home-2',
     namespace: 'home',
-    cwd: 'C:/work/OH-WorkSpace/notes',
+    cwd: 'C:/work/workspace/notes',
     agentId: 'agent-home',
     title: '首页会话二',
     messageCount: 2,
@@ -289,7 +289,7 @@ const CODE_ROWS = [
     path: 'C:/Users/qa/.hana/sessions/code-1',
     sessionId: 'sess-code-1',
     namespace: 'code',
-    cwd: 'C:/work/OH-WorkSpace/hana-mobile',
+    cwd: 'C:/work/workspace/hana-mobile',
     agentId: 'agent-code',
     workspaceMountId: 'mount-code-1',
     workspaceLabel: 'hana-mobile',
@@ -305,7 +305,7 @@ const CODE_ROWS_V2 = [
     path: 'C:/Users/qa/.hana/sessions/code-9',
     sessionId: 'sess-code-9',
     namespace: 'code',
-    cwd: 'C:/work/OH-WorkSpace/gateway',
+    cwd: 'C:/work/workspace/gateway',
     agentId: 'agent-code',
     workspaceMountId: 'mount-code-9',
     workspaceLabel: 'gateway',
@@ -318,7 +318,7 @@ const CODE_ROWS_V2 = [
 const BOOTSTRAP = {
   agents: [{ id: 'agent-home', name: 'Hakimi', isPrimary: true }],
   userName: 'qa',
-  homeFolder: 'C:/work/OH-WorkSpace',
+  homeFolder: 'C:/work/workspace',
 };
 
 const CREATE_RESPONSE = {
