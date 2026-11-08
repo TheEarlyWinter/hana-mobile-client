@@ -8,9 +8,14 @@
  *
  * 连接生命周期：客户端断开 / 上游中途断开 / 正常结束都走同一个幂等 teardown，
  * 否则客户端一走开，上游 socket 会一直挂到 idle timeout。
+ *
+ * 响应压缩：外网出口是家里的上行 + frp 隧道，明文 JSON 的每一 KB 都要上行一次，
+ * 所以在响应侧按需 gzip（见 shouldCompressResponse）。流式类型（SSE / NDJSON）一律不压，
+ * 压缩会把「写一条下发一条」变成「攒一窗再下发」，等于给消息流加延迟。
  */
 
 import http from 'node:http';
+import { createGzip } from 'node:zlib';
 import {
   CARD_HOST_TOOL_IDLE_MS,
   EXTERNAL_SCHEME,
@@ -31,9 +36,111 @@ const WORKSPACE_CONTENT_CSP = "sandbox; default-src 'none'; frame-ancestors 'non
 const API_DOCUMENT_CSP = "sandbox; default-src 'none'";
 const API_DOCUMENT_TYPES = new Set(['text/html', 'application/xhtml+xml', 'image/svg+xml']);
 
+/** 流式响应类型：压了会积压，直接排除（不是靠“看响应有多快”猜）。 */
+const STREAMING_MIME = new Set(['text/event-stream', 'application/x-ndjson']);
+const GZIP_MIME = new Set(['application/json', 'application/javascript']);
+
 function mimeOf(headers = {}) {
   const raw = Array.isArray(headers['content-type']) ? headers['content-type'][0] : headers['content-type'];
   return typeof raw === 'string' ? raw.split(';')[0].trim().toLowerCase() : '';
+}
+
+/** 只按 type/subtype 判定，忽略 charset 之类的参数。 */
+function isCompressibleMime(mime) {
+  if (!mime || STREAMING_MIME.has(mime)) return false;
+  if (GZIP_MIME.has(mime)) return true;
+  return mime.startsWith('text/');
+}
+
+/**
+ * 客户端能不能收 gzip。显式写了 gzip 就以它的 q 为准（gzip;q=0 不能压），
+ * 没写才退回 `*`：`gzip;q=0, *` 是明确的「别给我 gzip」。
+ */
+function acceptsGzip(req) {
+  const raw = req.headers['accept-encoding'];
+  const value = Array.isArray(raw) ? raw.join(',') : raw;
+  if (typeof value !== 'string' || !value.trim()) return false;
+  let wildcardQ = null;
+  for (const part of value.split(',')) {
+    const [tokenRaw, ...params] = part.split(';');
+    const token = tokenRaw.trim().toLowerCase();
+    if (!token) continue;
+    let q = 1;
+    for (const param of params) {
+      const match = param.trim().match(/^q\s*=\s*([0-9.]+)$/i);
+      if (match) {
+        const parsed = Number(match[1]);
+        q = Number.isFinite(parsed) ? parsed : 0;
+      }
+    }
+    if (token === 'gzip') return q > 0;
+    if (token === '*') wildcardQ = q;
+  }
+  return wildcardQ !== null && wildcardQ > 0;
+}
+
+function headerKeyOf(headers, name) {
+  return Object.keys(headers).find((key) => key.toLowerCase() === name);
+}
+
+function headerValueOf(headers, name) {
+  const key = headerKeyOf(headers, name);
+  return key === undefined ? undefined : headers[key];
+}
+
+function dropHeader(headers, name) {
+  const key = headerKeyOf(headers, name);
+  if (key !== undefined) delete headers[key];
+}
+
+/**
+ * Vary 只能合并，不能覆盖：上游的 allow-origin 之类一丢，中间缓存就会把
+ * 有条件的响应当成通用的发出去。
+ */
+function appendVary(headers, token) {
+  const existing = headerValueOf(headers, 'vary');
+  const values = (Array.isArray(existing) ? existing.join(',') : String(existing ?? ''))
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const lowered = values.map((value) => value.toLowerCase());
+  if (lowered.includes('*') || lowered.includes(token)) return;
+  values.push(token);
+  dropHeader(headers, 'vary');
+  headers.vary = values.join(', ');
+}
+
+/**
+ * 强制附件下载一律不压：`content-length` 一删，客户端就没了下载进度；
+ * 而且下载对象多半已是压缩格式（png/zip/pdf），再 gzip 只赚头开销。
+ * 只看 disposition-type，不看 filename 等参数（filename* 里有逗号、分号）。
+ */
+function isAttachmentResponse(headers) {
+  const raw = headerValueOf(headers, 'content-disposition');
+  const value = Array.isArray(raw) ? raw.join('; ') : String(raw ?? '');
+  return /^\s*attachment\b/i.test(value);
+}
+
+/**
+ * 压缩判定。`vary` 与 `compress` 分开：不可压的请求也要标 Vary，
+ * 否则中间缓存可能把压缩体留给不支持的客户端。
+ */
+function shouldCompressResponse(req, status, headers) {
+  const noBody = status === 204 || status === 304 || req.method === 'HEAD';
+  // 206/Content-Range 描述的是字节区间：压了之后 content-range 与客户端解出来的偏移对不上，
+  // 续传/拖动进度会直接错位，所以区间响应一律不碰。
+  const ranged = status === 206 || headerValueOf(headers, 'content-range') !== undefined;
+  // 上游已经处理过编码（哪怕是 identity）就不再动它：二次压缩等于双重编码。
+  const alreadyEncoded = headerValueOf(headers, 'content-encoding') !== undefined;
+  const noTransform = /\bno-transform\b/i.test(String(headerValueOf(headers, 'cache-control') ?? ''));
+  const attachment = isAttachmentResponse(headers);
+  const eligible = !noBody
+    && !ranged
+    && !alreadyEncoded
+    && !noTransform
+    && !attachment
+    && isCompressibleMime(mimeOf(headers));
+  return { vary: eligible, compress: eligible && acceptsGzip(req) };
 }
 
 function sanitizeFilename(name) {
@@ -162,11 +269,14 @@ export function createHttpProxy({ isApiPath }) {
     // 幂等收尾：客户端断开、上游断开、正常结束都走同一条路，
     // 否则客户端一走开，上游 socket 会一直挂到 idle timeout。
     let upstreamResRef = null;
+    let gzipRef = null;
     let settled = false;
     let upstreamReq = null;
     const teardown = () => {
       if (settled) return;
       settled = true;
+      // 先停压缩流再断上游：反过来的话 gzip 还会继续写已销毁的 res。
+      if (gzipRef) gzipRef.destroy();
       if (upstreamResRef) upstreamResRef.destroy();
       if (upstreamReq) upstreamReq.destroy();
     };
@@ -227,8 +337,42 @@ export function createHttpProxy({ isApiPath }) {
           teardown();
           return;
         }
+        const { vary, compress } = shouldCompressResponse(req, st, responseHeaders);
+        // 不可压时同样标 Vary：否则中间缓存可能把压缩体发给不支持的客户端。
+        if (vary) appendVary(responseHeaders, 'accept-encoding');
+        if (compress) {
+          // content-length 是明文的长度，压完就假了；交给 chunked。
+          dropHeader(responseHeaders, 'content-length');
+          responseHeaders['content-encoding'] = 'gzip';
+        }
         res.writeHead(upstreamRes.statusCode || 502, responseHeaders);
-        upstreamRes.pipe(res);
+
+        // 诊断用的两个观测点（只读，不改语义）：
+        //  - upstreamDoneAt：上游把响应发完的时刻。ms 减去它就是「发给客户端」花的时间。
+        //  - clientBytes：真正写下去的字节数（压缩后），用来看一次响应到底有多少流量。
+        // 排查「打开会话很慢」时，两者一对比就知道该治上游还是该减包体。
+        res.clientBytes = 0;
+        const writeResponseChunk = res.write.bind(res);
+        res.write = (chunk, ...rest) => {
+          if (chunk) res.clientBytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
+          return writeResponseChunk(chunk, ...rest);
+        };
+        upstreamRes.on('end', () => {
+          res.upstreamDoneAt = process.hrtime.bigint();
+        });
+
+        if (!compress) {
+          upstreamRes.pipe(res);
+          return;
+        }
+        const gzip = createGzip();
+        gzipRef = gzip;
+        // 压缩流出错：客户端那边的 head 已经发了，只能断开，不能留一个永远收不完的 body。
+        gzip.on('error', () => failResponse());
+        upstreamRes.on('close', () => {
+          if (!upstreamRes.complete) gzip.destroy();
+        });
+        upstreamRes.pipe(gzip).pipe(res);
       },
     );
 

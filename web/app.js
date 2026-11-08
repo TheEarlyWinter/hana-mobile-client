@@ -18,6 +18,7 @@ import { workspaceUrlForFile, matchWorkspaceByLabel, buildWorkspaceContentUrl } 
 import { createStreamState } from './stream-state.js';
 import { createApiClient } from './http-client.js';
 import { createAvatarView, agentAvatarUrl } from './avatar-view.js';
+import { createAvatarPack } from './avatar-pack.js';
 import { createSessionListView, sessionFolder as sessionFolderBase, baseName, sessionTitle } from './session-list-view.js';
 import { createSessionActions, createSessionActionsView, sameSession } from './session-actions.js';
 import { createSessionListController } from './session-list-controller.js';
@@ -700,6 +701,7 @@ async function boot() {
 
   renderModelChip(primary?.chatModel);
   renderAgentCarousel();
+  void primeStartupAvatars();
   // 首页首次选中的助手是直接赋值、不走 selectAgent，轻量刷新入口角标。
   void casual.refreshBadge();
   void features?.get('feed')?.refresh?.();
@@ -920,9 +922,34 @@ function closeDrawer() {
 
 const { paintAvatar } = createAvatarView({ document });
 
+/* 头像包：一次请求取回全部头像，省掉「每个头像一次往返」。
+ * 取不到不影响任何路径：urlFor 没命中就退回原来的逐张地址。 */
+const avatarPack = createAvatarPack();
+
+/**
+ * 启动时预取头像，到了再把依赖头像的几处重画一遍。
+ * 不 await 进启动流程：它会和 loadSessions 并行，慢一点也不挡界面。
+ */
+async function primeStartupAvatars() {
+  const ids = ['user', ...(S.agents || []).map((a) => a && (a.id || a.agentId)).filter(Boolean)];
+  if (ids.length < 2) return;
+  const before = avatarPack.size();
+  await avatarPack.prime(ids);
+  if (avatarPack.size() === before) return; // 一个都没拿到（离线/上游拒绝），保持现状
+
+  paintAvatar($('userAvatar'), { url: userAvatarUrl(), name: S.userName });
+  renderAgentCarousel();
+  updateHeroCompanion();
+  // 抽屉开着就不要再重画列表：重建行会打断正在看的位置。
+  const drawerOpen = $('drawerPanel')?.classList.contains('open');
+  if (!drawerOpen && Array.isArray(S.sessions) && S.sessions.length) sessionListView.render(S.sessions);
+}
+
 /** 按 agent id 拼头像地址；id 不在 bootstrap 列表里就当没有头像，避免一串 404。 */
 function agentAvatarUrlById(id) {
   if (!id) return null;
+  const packed = avatarPack.urlFor(id);
+  if (packed) return packed;
   const agent = (S.agents || []).find((a) => a && (a.id === id || a.agentId === id));
   if (agent) return agentAvatarUrl(agent);
   // 子代理池里的成员（寻迹、Luna 这些）不一定出现在首页那排 Agent 里，
@@ -932,6 +959,8 @@ function agentAvatarUrlById(id) {
 
 /** 用户本人的头像；bootstrap 明确说没有时就直接跳过，不去白撞一次 404。 */
 function userAvatarUrl() {
+  const packed = avatarPack.urlFor('user');
+  if (packed) return packed;
   return S.boot?.hasUserAvatar === false ? null : '/api/avatar/user';
 }
 

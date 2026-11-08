@@ -27,6 +27,7 @@ import {
 } from './security-policy.mjs';
 import { isEligibleOwnerPrincipal, isOwnerPrincipalCandidate, loadLocalOwner } from './local-owner.mjs';
 import { checkReadAuth, denyRead } from './upstream-access.mjs';
+import { createAvatarPack, isAvatarPackPath } from './avatar-pack.mjs';
 import { CARD_RUNTIME_PATH, denyCardRuntime, serveCard, serveSharedCardRuntime } from './card-host.mjs';
 import { serveFeedCard } from './feed-card-host.mjs';
 import { serveSessionFile } from './session-files.mjs';
@@ -108,6 +109,9 @@ function denyEncodedPath(res) {
 /* HTTP 反向代理（含强制下载、hop-by-hop 清理）已拆到 http-proxy.mjs。 */
 
 const { proxyHttp } = createHttpProxy({ isApiPath });
+
+/* 头像聚合：网关自己的端点（自己验身份），不是反代。 */
+const avatarPack = createAvatarPack();
 
 /* ------------------------------------------------------------------ */
 /* 本机 owner 代办：仅精确 POST /api/sessions/new                        */
@@ -549,6 +553,12 @@ async function handleRequest(req, res) {
     });
     return;
   }
+  // 头像聚合：一次请求取回 N 个头像，省掉 N-1 次隧道往返。
+  // 必须放在 isApiPath 之前：否则会被整体反代给上游（上游没有这个路由）。
+  if (isAvatarPackPath(url)) {
+    await avatarPack.handle(req, res);
+    return;
+  }
   if (isApiPath(url)) {
     // owner bearer 只用于精确的 POST /api/sessions/new；new-detached 和相似路径
     // 仍按原样带客户端 Cookie 反代，绝不共用 isCreateSessionPath 的宽匹配。
@@ -577,6 +587,9 @@ async function handleRequest(req, res) {
 
 function requestHandler(req, res) {
   const startedAt = process.hrtime.bigint();
+  // 诊断用：反代层在收到上游响应末尾时把时间戳挂到 res 上，这里换算成 upstreamMs。
+  // 有了它才能分清一次慢请求是「上游组装慢」还是「把大响应发给手机慢」。
+  res.requestStartedAt = startedAt;
   let recorded = false;
 
   // 每个请求只记一条：正常结束和客户端中途断开都走这里，status 0 表示没写响应就走了。
@@ -595,6 +608,10 @@ function requestHandler(req, res) {
       path: pathnameOf(req.url || ''),
       status,
       ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
+      // 压缩后实际写给客户端的字节数（没经过反代时没有这个字段）。
+      bytes: typeof res.clientBytes === 'number' ? res.clientBytes : undefined,
+      // 上游那一跳自己的耗时：ms 里剩下的部分就是「发给客户端」的时间。
+      upstreamMs: res.upstreamDoneAt ? Number(res.upstreamDoneAt - startedAt) / 1e6 : undefined,
       requestId: req.headers['x-request-id'],
       errorCode: err?.code,
       error: err?.message || (err ? String(err) : undefined),

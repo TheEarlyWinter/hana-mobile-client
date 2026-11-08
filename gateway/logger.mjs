@@ -352,6 +352,10 @@ export function createLogger(options = {}) {
       }
       putNumber(record, 'status', entry.status);
       putNumber(record, 'ms', entry.ms);
+      // 诊断用：实际下发字节（压缩后）与上游那一跳自己的耗时。
+      // ms 明显大于 upstreamMs 就说明慢在「发给客户端」，反之慢在上游。
+      putNumber(record, 'bytes', entry.bytes);
+      putNumber(record, 'upstreamMs', entry.upstreamMs);
       putText(record, 'requestId', entry.requestId);
       // 客户端地址：手机与记录本机请求混在一起时，靠它分清这条是谁打的（原来只在 console 里）。
       putText(record, 'ip', entry.ip);
