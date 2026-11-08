@@ -1579,6 +1579,13 @@ let resumeCatchUpCount = 0;
 function scheduleHistorySync() {
   const session = S.session;
   if (!session) return;
+  // 历史刚刚才被对账取回来：同一个事件都没新来，再取一次不可能更新。
+  // 真机上息屏恢复会因此多打一次 60KB / 3.4s 的完全相同的请求。
+  // 只认对账（justReconciled），普通 loadHistory 之后的 idle 同步是正常补全，不能噤。
+  if (typeof conv.justReconciled === 'function' && conv.justReconciled(2000)) {
+    if (DEBUG) console.info('[app] history sync skipped: just reconciled');
+    return;
+  }
   const owner = S.principal;
   if (resumeCatchUpTimer) clearTimeout(resumeCatchUpTimer);
   resumeCatchUpTimer = setTimeout(() => {
@@ -1651,6 +1658,8 @@ const router = createEventRouter({
   // 否则只合并不收尾。activityToken 用来在取历史期间再确认一次「真的没有再新事件」。
   onIdleReconcile: ({ activityToken }) => {
     void conv.reconcileAfterForeground({
+      // 事件计数也交给控制器：同一批事件下重复对账不重复打上游。
+      activityToken,
       isStillQuiet: () => router.activityCount() === activityToken,
       onRecovered: () => router.completeIdleReconcile(activityToken),
     });

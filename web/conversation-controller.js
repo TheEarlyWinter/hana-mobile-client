@@ -213,6 +213,10 @@ export function createConversationController({
     rememberCurrentScroll({ flush: true });
     // 每次打开都是一次导航：异步流程靠这个号判断「用户是不是已经自己走了」。
     navEpoch += 1;
+    // 换了会话，上一个会话的去重/刚同步标记不能再影响这个会话。
+    lastReconcileToken = null;
+    lastReconcileSessionKey = null;
+    lastHistoryPageAt = 0;
     const openEpoch = navEpoch;
     closeDrawer();
     state.session = {
@@ -310,6 +314,69 @@ export function createConversationController({
    */
   let pendingReconcile = null;
 
+  /**
+   * 上一次对账检查过的事件计数（同一会话、同一批事件不重复打上游）。
+   *
+   * 真机实测：一次息屏恢复会出现两次完全相同的 `/api/sessions/messages`（各 60KB、
+   * 各 3.4s，间隔 5 秒）。对账抢在窗口到期时取一次，收尾后又有一个触发点拿同样的事件计数
+   * 再取一次——一个事件都没新来，第二次不可能拿到新内容，纯属白打上游。
+   * 计数变了（流真的在动）就放行，所以不会把真正的恢复堵住。
+   */
+  let lastReconcileToken = null;
+  let lastReconcileSessionKey = null;
+  let lastReconcileAt = 0;
+
+  /**
+   * 同一批事件下的重复对账保护窗口。
+   *
+   * 不能永久去重：如果第一次对账时回复还没跑完（历史不比实时正文完整），用户又进了一次后台，
+   * 那之后宿主可能一次性把回复跑完且一条事件都不发——那正是这个修复要抢回来的场景，
+   * 永久去重会让它永远补不回来。所以只挡住「短时间内的重试」，过了窗口就允许重新对账。
+   */
+  const RECONCILE_REPEAT_GUARD_MS = 6000;
+
+  /** 最近一次历史页真的上屏的时间：常规历史同步用它避开「刚同步过又同步一次」。 */
+  let lastHistoryPageAt = 0;
+
+  /**
+   * 最近一次「对账真的把历史取回来了」的时间。
+   *
+   * 只在对账分支里记。普通 loadHistory 不算——它之后紧接的 idle 同步是正常的补全路径，
+   * 真机上白打的那一次则发生在对账刚取完、收尾引起的 idle 又排一次同步；两者必须区分开，
+   * 否则会把该补的回复也一起噤掉。
+   */
+  let lastReconcileFetchAt = 0;
+
+  /** 会话身份（用于避免跨会话误用去重标记）。 */
+  function sessionKeyOf(session) {
+    if (!session) return '';
+    return String(session.sessionId || session.sessionPath || '');
+  }
+
+  /**
+   * 刚刚做过前台对账（且历史已经取回来了）吗。
+   *
+   * 给装配层用：对账收尾后宿主还会发一次 idle，那条 idle 会排一次常规历史同步；
+   * 但对账刚刚才把同一页取回来，再取一次不可能更新。
+   * 只认对账，不认普通 loadHistory。
+   * @param {number} [ms] 观察窗口，默认 2000ms
+   * @returns {boolean}
+   */
+  function justReconciled(ms = 2000) {
+    if (!lastReconcileFetchAt) return false;
+    return Date.now() - lastReconcileFetchAt < ms;
+  }
+
+  /**
+   * 刚刚同步过历史吗（毫秒内）。
+   * @param {number} [ms] 观察窗口，默认 2000ms
+   * @returns {boolean}
+   */
+  function recentlySynced(ms = 2000) {
+    if (!lastHistoryPageAt) return false;
+    return Date.now() - lastHistoryPageAt < ms;
+  }
+
   /** 去掉 mood 块与多余空白：实时正文与历史正文的渲染标记不一样，比较前先归一。 */
   function comparableText(raw) {
     if (typeof raw !== 'string' || !raw) return '';
@@ -390,13 +457,22 @@ export function createConversationController({
    * @param {(() => void)|null} [options.onRecovered] 历史证明这一轮已跑完时的收尾回调
    * @returns {Promise<boolean>} 是否按「跑完了」收尾并换屏
    */
-  async function reconcileAfterForeground({ isStillQuiet = null, onRecovered = null } = {}) {
+  async function reconcileAfterForeground({ isStillQuiet = null, onRecovered = null, activityToken = null } = {}) {
     const session = state.session;
     if (!session) return false;
     // 已经不忙（正常前台使用）：这条对账根本不需要动手，也不该发请求。
     if (!state.busy) return false;
     // 上一次对账还没落地（网络慢）：不叠加第二次请求。
     if (pendingReconcile) return false;
+    // 同一会话、同一批事件、且刚刚才查过：没有新信息可拿，不重复打上游。
+    if (activityToken !== null && lastReconcileToken === activityToken
+      && lastReconcileSessionKey === sessionKeyOf(session)
+      && Date.now() - lastReconcileAt < RECONCILE_REPEAT_GUARD_MS) {
+      return false;
+    }
+    lastReconcileToken = activityToken;
+    lastReconcileSessionKey = sessionKeyOf(session);
+    lastReconcileAt = Date.now();
     const reconcile = { session, epoch: navEpoch, isStillQuiet, onRecovered, recovered: false };
     pendingReconcile = reconcile;
     try {
@@ -428,10 +504,13 @@ export function createConversationController({
     // 插节点，不动实时轮；'open'（首屏 / 重载）仍是整页替换，生成中照旧拦住。
     canLoad: (kind) => (kind === 'older' ? true : !state.busy),
     onPage: (page) => {
+      // 历史真的回来了：常规同步靠这个时间避开「刚同步过又同步一次」。
+      lastHistoryPageAt = Date.now();
       // 前台对账取回来的这一页：先判断要不要收尾换屏，再决定走不走常规渲染。
       const reconcile = pendingReconcile;
       if (reconcile) {
         pendingReconcile = null;
+        lastReconcileFetchAt = Date.now();
         const recovered = applyReconcileDecision(reconcile, page);
         // 这一次 open 的机会已经用掉了：早先被 busy 拦下的「原会话重载」不能借这一页
         // 把屏上内容顺手替换掉（否则「只合并」就成了整页丢失）。
@@ -663,6 +742,10 @@ export function createConversationController({
     loadHistory,
     // 前台恢复对账（app 在 event-router 的对账窗口到期时调）
     reconcileAfterForeground,
+    // 「刚刚同步过历史吗」：装配层排常规同步前先问一句，避免刚取完又取一次。
+    recentlySynced,
+    // 「刚刚做过前台对账吗」：只认对账，避免把正常 idle 同步也噤掉。
+    justReconciled,
     backToList,
     chatSubtitle,
     renderHistoryPage,

@@ -1,19 +1,24 @@
 /**
- * 会话文件可读的根目录：HANA_HOME 下三个固定目录 + 当前登录用户的工作区根。
+ * 会话文件可读的根目录：HANA_HOME 下三个固定目录 + 本机工作区挂载 + 当前登录用户的工作区根。
  *
  * 为什么要工作区根：宿主给会话文件记的是绝对路径（`filePath`），agent 生成的文件、
  * 外部目录里的文件都落在宿主存储之外（`storageKind: "external"`），上游
  * `/api/resources/<fileId>/content` 对这类文件回 400。手机上唯一的替代读法就是
- * `/gw/file/<b64url(path)>`，而这条路过去只认 HANA_HOME 的三个目录，文档全被 403 挡住。
+ * `/gw/file/<b64url(path)>`——它必须知道「哪些目录算自己的」。
  *
- * 工作区根只能问上游要，而且要带着「这个请求自己的 Cookie」问：用别人的根等于越权，
- * 用上一次登录留下的根等于把上一任的文件发给这一任。所以缓存按 sha256(cookie) 隔离，
- * 60 秒过期。
+ * 三个来源：
+ *  1. HANA_HOME 下固定三个目录（会话文件 / 上传 / 附件原图）；
+ *  2. 本机工作区挂载：`HANA_HOME/studio-mounts.json` 里 status=active 的 local_fs 挂载。
+ *     这份文件就在同一台机器上，读它比让上游转一手更可靠；disabled 的挂载一律不算。
+ *  3. 上游 `/api/studio/workspaces` 返回的根（带请求自己的 Cookie，60 秒缓存）。
  *
- * 取失败（上游没起、超时、非 200、非 JSON、形状不对）一律退化成「只有 HANA_HOME 三个根」，
+ * 第 3 条只能问上游要，而且要带着「这个请求自己的 Cookie」问：用别人的根等于越权，
+ * 用上一次登录留下的根等于把上一任的文件发给这一任。所以缓存按 sha256(cookie) 隔离。
+ * 取失败（上游没起、超时、非 200、非 JSON、形状不对）一律退化成前两个来源，
  * 绝不把 500 抛给调用方——读不到工作区文件是能力降级，不是网关故障。
  */
 
+import fsp from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -48,6 +53,10 @@ const cache = new Map();
 function cacheKeyFor(cookie) {
   return createHash('sha256').update(String(cookie || '')).digest('hex');
 }
+
+/** 本机挂载清单：按 mtime 失效，改了挂载下一次请求就生效，不用重启网关。 */
+const MOUNTS_FILE = path.join(HANA_HOME, 'studio-mounts.json');
+let mountsCache = { mtimeMs: -1, roots: [] };
 
 /** 上游给的 nativeRootPath 只接受「绝对路径字符串」，并且剔掉控制字符。 */
 function normalizeRootPath(value) {
@@ -186,11 +195,54 @@ export async function workspaceRoots(cookie) {
 }
 
 /**
+ * 本机工作区挂载的根：`studio-mounts.json` 里 provider=local_fs 且 status=active 的。
+ * 读不到或格式不对就当「没有挂载」，不影响 HANA_HOME 那三个根。
+ * @returns {Promise<string[]>}
+ */
+async function localMountRoots() {
+  let stat;
+  try {
+    stat = await fsp.stat(MOUNTS_FILE);
+  } catch {
+    mountsCache = { mtimeMs: -1, roots: [] };
+    return [];
+  }
+  if (stat.mtimeMs === mountsCache.mtimeMs) return mountsCache.roots;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await fsp.readFile(MOUNTS_FILE, 'utf8'));
+  } catch {
+    // 文件正在被写（宿主落盘）时可能只读到半截：不缓存，下次再读。
+    return mountsCache.roots;
+  }
+
+  const mounts = Array.isArray(parsed?.mounts) ? parsed.mounts : [];
+  const roots = [];
+  const seen = new Set();
+  for (const item of mounts) {
+    if (!item || typeof item !== 'object') continue;
+    // 只认本机文件系统挂载；远端/存储类型不在这条路的范围里。
+    if (item.provider && item.provider !== 'local_fs') continue;
+    // 被禁用的挂载不能读（用户在设置里关掉就是不想让它被读）。
+    if (item.status && item.status !== 'active') continue;
+    const root = normalizeRootPath(item.rootLocator?.path);
+    if (!root) continue;
+    const key = process.platform === 'win32' ? root.toLowerCase() : root;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push(root);
+  }
+  mountsCache = { mtimeMs: stat.mtimeMs, roots };
+  return roots;
+}
+
+/**
  * `/gw/file` 这一条请求真正可读的全部根。根顺序即比较顺序，不影响判定。
  * @param {string|undefined} cookie
  * @returns {Promise<string[]>}
  */
 export async function fileRoots(cookie) {
-  const workspace = await workspaceRoots(cookie);
-  return [...HANA_HOME_ROOTS, ...workspace];
+  const [mounts, workspace] = await Promise.all([localMountRoots(), workspaceRoots(cookie)]);
+  return [...HANA_HOME_ROOTS, ...mounts, ...workspace];
 }

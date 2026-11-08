@@ -87,6 +87,7 @@ const ALLOWLIST = Object.freeze([
   'tests/dist_cache.test.mjs',
   'tests/features_registry.test.mjs',
   'tests/file_preview_generation.test.mjs',
+  'tests/file_roots_mounts.test.mjs',
   'tests/file_source.test.mjs',
   'tests/foreground_idle_reconcile.test.mjs',
   'tests/gateway-boundary.test.mjs',

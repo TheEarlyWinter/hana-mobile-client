@@ -411,17 +411,17 @@ try {
   });
 
   /* ------------------------------------------------------------------ */
-  /* 5. 只触发一次：窗口过完不再排第二个；重新进后台再回来会重置           */
+  /* 5. 重复恢复不重复打上游；过了保护窗口才允许重新对账                   */
   /* ------------------------------------------------------------------ */
 
-  await t('对账只触发一次；重新进后台再回来会重置（重新开窗）', async () => {
+  await t('短时间内的重复恢复不再重复补拉；过了保护窗口才允许重新对账', async () => {
     await ensureIdleMainSession();
     historyFixture = historyWith('RECON_BASELINE_REPLY');
     await hana.loadHistory();
     await h.waitFor(() => transcriptText().includes('RECON_BASELINE_REPLY'), '夹具：基线历史上屏', 2000);
 
     await startLiveTurn(lastSocket(), { streamId: 'recon-e', text: 'RECON_E_PART' });
-    // 历史没有新内容 → 对账跑完仍然 busy，方便观察「会不会再排第二次」。
+    // 历史没有新内容 → 对账跑完仍然 busy，方便观察「会不会重复打上游」。
     historyFixture = historyWith('RECON_E_PREVIOUS_REPLY 上一轮的回复');
     const beforeGet = historyCount();
 
@@ -443,7 +443,7 @@ try {
     assert.equal(historyCount(), beforeGet + 1, '对账只能触发一次，不能变成轮询');
     assert.equal(S.busy, true, '夹具：这一轮仍然 busy');
 
-    // 重新进后台再回来：窗口重置，再放行一次（且只有一次）。
+    // 紧接着再回一次前台：事件计数完全没变，保护期内不得再打一次上游。
     h.doc.visibilityState = 'hidden';
     h.fireDocument('visibilitychange');
     await h.delay(120);
@@ -461,19 +461,38 @@ try {
       sinceSeq: 0,
       events: [],
     });
+    await h.delay(AFTER_WINDOW_MS);
+    await h.settle(8);
+    assert.equal(historyCount(), beforeGet + 1, '同一批事件下短时间内重复恢复不得重复补拉');
 
+    // 过了保护窗口（6s）：允许重新对账一次——否则「回复在后台悄悄跑完」就永远补不回来。
+    await h.delay(6600);
+    h.doc.visibilityState = 'hidden';
+    h.fireDocument('visibilitychange');
+    await h.delay(120);
+    h.doc.visibilityState = 'visible';
+    const beforeThird = socketCount();
+    h.fireWindow('focus');
+    const third = await waitForNewSocket(beforeThird, '第三次回前台应再重连一次');
+    third.open();
+    await h.waitFor(() => S.wsReady, '第三次恢复的连接就绪', 2000);
+    third.push({
+      type: 'stream_resume',
+      sessionId: SESSION_ID,
+      sessionPath: SESSION_PATH,
+      streamId: 'recon-e',
+      sinceSeq: 0,
+      events: [],
+    });
     await h.waitFor(
       () => historyCount() === beforeGet + 2,
-      '重新回到前台后应重新开窗并再放行一次',
-      AFTER_WINDOW_MS + 1500,
+      '过了保护窗口后应允许再对账一次',
+      AFTER_WINDOW_MS + 2000,
     );
-    await h.delay(WINDOW_MS + 600);
-    await h.settle(8);
-    assert.equal(historyCount(), beforeGet + 2, '第二次恢复同样只放行一次');
     assert.equal(S.busy, true, '仍然没有新内容，busy 保持');
 
     // 清理：真实 status:false 走既有收尾。
-    pushStatus(second, false, 'recon-e');
+    pushStatus(third, false, 'recon-e');
     await h.waitFor(() => S.busy === false, '夹具：真实 status:false 收尾', 2000);
     await h.delay(600);
     await h.settle(6);
