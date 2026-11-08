@@ -20,6 +20,11 @@
  * @param {(id: string) => Element|null} options.getElement
  * @param {object} options.renderer chat-renderer 实例
  * @param {() => void} options.connectWS 重连（app 的薄入口）
+ * @param {(() => void)|null} [options.onForegroundResume]
+ *   前台恢复真的跑起来（重连已发起）之后通知一次装配层。app 用它开一个短的对账窗口，
+ *   等一段时间看有没有任何事件到来；本模块只管「什么时候」，判断与收尾不在这一层。
+ * @param {(() => void)|null} [options.onForegroundSuspend]
+ *   进后台 / 失焦 / 文档卸载时通知：前台恢复与它的对账窗口一起作废。
  * @param {object|null} options.actionConfirmation
  * @param {object} options.sessionListController
  * @param {object} options.namespaceTabs
@@ -34,6 +39,8 @@ export function createMobileLifecycle({
   getElement,
   renderer,
   connectWS,
+  onForegroundResume = null,
+  onForegroundSuspend = null,
   actionConfirmation = null,
   sessionListController,
   namespaceTabs,
@@ -224,6 +231,22 @@ export function createMobileLifecycle({
     foregroundResumeTimer = null;
   }
 
+  /**
+   * 真的进后台 / 失焦 / 卸载：取消待执行的恢复，并通知装配层把它那边的对账窗口一起作废。
+   *
+   * 和 cancelForegroundResume 分开：同一个 100ms 合并窗口内的重复 focus/visible 也会走
+   * 取消（见 scheduleForegroundResume），那种情况不能顺带把刚开的对账窗口作废。
+   */
+  function suspendForegroundResume() {
+    cancelForegroundResume();
+    if (typeof onForegroundSuspend !== 'function') return;
+    try {
+      onForegroundSuspend();
+    } catch (err) {
+      console.error('[hana] onForegroundSuspend error:', err);
+    }
+  }
+
   function scheduleForegroundResume() {
     const session = state.session;
     if (!session) return;
@@ -236,6 +259,15 @@ export function createMobileLifecycle({
       // 已经又转回后台：等下一次真正回到前台再说。
       if (document.visibilityState === 'hidden') return;
       connectWS();
+      // 对账窗口从「重连已发起」开始算，而不是等 socket open：
+      // 底层连接没醒过来时窗口照样会到期，那正是最需要拿历史对账的情形。
+      // 回包晚到只会多取一次历史，不会误伤正在跑的流（收尾前还要再比一次事件计数）。
+      if (typeof onForegroundResume !== 'function') return;
+      try {
+        onForegroundResume();
+      } catch (err) {
+        console.error('[hana] onForegroundResume error:', err);
+      }
     }, FOREGROUND_RESUME_DELAY_MS);
   }
 
@@ -245,7 +277,7 @@ export function createMobileLifecycle({
       if (document.visibilityState === 'visible' && state.session) {
         scheduleForegroundResume();
       } else if (document.visibilityState === 'hidden') {
-        cancelForegroundResume();
+        suspendForegroundResume();
         if (actionConfirmation && typeof actionConfirmation.cancelAll === 'function') {
           actionConfirmation.cancelAll();
         }
@@ -256,7 +288,7 @@ export function createMobileLifecycle({
       if (state.session) scheduleForegroundResume();
     });
     window.addEventListener('blur', () => {
-      cancelForegroundResume();
+      suspendForegroundResume();
     });
   }
 
@@ -276,6 +308,7 @@ export function createMobileLifecycle({
   function watchPagehide() {
     window.addEventListener('pagehide', (event) => {
       if (event?.persisted) return;
+      suspendForegroundResume();
       sessionListController.dispose();
       namespaceTabs.dispose();
     });

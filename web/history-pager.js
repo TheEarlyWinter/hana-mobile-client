@@ -23,11 +23,14 @@
  *   createHistoryPager({ api, pageSize=50, onPage, onState, canLoad, retry })
  *     -> { open, loadOlder, reset, dispose }
  *
- *   - open(session)：同步捕获 sessionId/path 标量（至少一者非空，否则抛 TypeError），
+ *   - open(session, { bypassBusy }? )：同步捕获 sessionId/path 标量（至少一者非空，否则抛 TypeError），
  *     递增 epoch、清空 seen/游标，请求最新一页：
  *       GET /api/sessions/messages?sessionId=...&path=...&limit=50
  *     只带有效身份与 limit，不带 namespace / all / before。旧 open 的成功/失败因
  *     epoch 不匹配而静默丢弃。成功后 onPage({entries, prepend:false, hasMore, sessionFiles})。
+ *     bypassBusy=true 是「一次性放行」：只为这一次 open 绕过 canLoad('open') 的 busy 门禁
+ *     （前台恢复对账要取一页来和屏上内容对照，调用方已经自证过没有新事件）。它不改变
+ *     canLoad 的其余语义、不影响 'older'、不在多次 open 之间粘住，本次请求一结束就收回。
  *   - loadOlder()：仅当 hasMore && cursor>0 && !loading 且 canLoad('older') 放行可尝试请求
  *       ...&before=<已加载页最早 raw message id>&limit=50
  *     成功后 onPage({entries, prepend:true, hasMore, sessionFiles})；重叠/已见 id 会被过滤。
@@ -281,7 +284,7 @@ function parsePage(raw) {
  *   （kind: 'open' 整页替换受 busy 保护，'older' 加载更早）；缺省按 'open' 处理
  * @param {{attempts?: number, delays?: number[], sleep?: (ms: number) => Promise<void>}} [options.retry]
  *   瞬时故障重试策略，默认 { attempts: 2, delays: [400, 1200], sleep: setTimeout }
- * @returns {{ open: (session: object) => Promise<boolean>, loadOlder: () => Promise<boolean>, reset: () => void, dispose: () => void }}
+ * @returns {{ open: (session: object, options?: {bypassBusy?: boolean}) => Promise<boolean>, loadOlder: () => Promise<boolean>, reset: () => void, dispose: () => void }}
  */
 export function createHistoryPager({
   api,
@@ -304,6 +307,8 @@ export function createHistoryPager({
    * 返回值按真值判断，和改动前的 `!canLoad()` 完全一致。
    */
   function allowsLoad(kind) {
+    // 一次性放行只覆盖整页路径：『加载更早』照旧只看调用方给的口径。
+    if (forcedOpen && kind !== KIND_OLDER) return true;
     return Boolean(canLoad(kind === KIND_OLDER ? KIND_OLDER : KIND_OPEN));
   }
 
@@ -319,6 +324,14 @@ export function createHistoryPager({
   let hasMore = false;
   let loading = false;
   let error = null;
+  /**
+   * 一次性 busy 放行（open 的 bypassBusy）。
+   *
+   * 只放开整页 'open'，且只对「这一次 open 派生出来的请求」有效：open 返回的 Promise
+   * 一结束就收回。所以它既不能粘到下一次 open（每次 open 都会重设），也不能在
+   * 退避重试期间被别的路径借用（'older' 显式排除）。
+   */
+  let forcedOpen = false;
   // 最近一次请求的来源。reset/dispose 不归零：契约要求「无请求时沿用最近一次」，
   // 而且视图只在 error 非空时才读 phase。
   let phase = 'initial';
@@ -504,7 +517,7 @@ export function createHistoryPager({
     }
   }
 
-  function open(session) {
+  function open(session, { bypassBusy = false } = {}) {
     if (disposed) return Promise.resolve(false);
     const nextIdentity = captureIdentity(session);
     const sameTarget = Boolean(
@@ -512,6 +525,10 @@ export function createHistoryPager({
       && identity.sessionId === nextIdentity.sessionId
       && identity.path === nextIdentity.path,
     );
+
+    // 一次性放行要在所有 busy 早退之前就位；无论这次 open 成功、失败还是被后续复核拦下，
+    // 都由下面返回的 Promise 统一收回，绝不留给下一次 open 或其它路径。
+    forcedOpen = Boolean(bypassBusy);
 
     // 生成中后台补拉被 busy 拦下时，不能顺手把已加载页的游标清掉：
     // 目标没变就只是「这次不重载」，已翻过的页要能继续往前翻；
@@ -542,7 +559,11 @@ export function createHistoryPager({
 
     loading = true;
     emitState();
-    return request(myEpoch, null, false);
+    const pending = request(myEpoch, null, false);
+    // finally 同时也覆盖「同步抛错后折成失败」与退避重试：一次 open 只放行一次。
+    return pending.finally(() => {
+      forcedOpen = false;
+    });
   }
 
   function loadOlder() {
@@ -573,6 +594,7 @@ export function createHistoryPager({
   function reset() {
     if (disposed) return;
     epoch += 1;
+    forcedOpen = false;
     identity = null;
     seen.clear();
     seenBlocks.clear();
@@ -587,6 +609,7 @@ export function createHistoryPager({
     if (disposed) return;
     disposed = true;
     epoch += 1;
+    forcedOpen = false;
     identity = null;
     seen.clear();
     seenBlocks.clear();

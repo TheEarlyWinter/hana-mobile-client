@@ -22,6 +22,32 @@ import { fileUrlFor, resourceContentUrl } from './file-urls.js';
 const resourceUrl = resourceContentUrl;
 
 /**
+ * 前台恢复对账窗口的默认时长。
+ *
+ * 取值理由：
+ *  - 太短（<1.5s）：真机上 resume_stream 的回包要经过一次 WebSocket 往返 +
+ *    宿主读缓存，隔隧道的场景实测 200~900ms，慢的时候接近 1.5s；窗口赶在回包
+ *    之前到期，就会在「回放马上就到」的情况下多发一次历史 GET。
+ *  - 太长（>2.5s）：这条对账本来就是「没人理它才动手」，窗口越长，用户盯着
+ *    半截回复干等的时间越长；而这段时间屏幕是完全静止的。
+ *  - 2s 留出了一次心跳（1s）的余量，足够让正常的回放/事件先到，又不会让人明显
+ *    感觉到「卡了一下才补上」。
+ */
+const DEFAULT_IDLE_RECONCILE_WINDOW_MS = 2000;
+
+/**
+ * 不构成「流还活着」的记账类事件。
+ *
+ * context_usage 是连接 open 后我们自己要的上下文用量，notification / interlude /
+ * 去重回执也都是旁路告知：它们来了不代表这一轮在生成，不能用来取消对账窗口，
+ * 否则「回放为空、只回了 context_usage」这种真机形状会永远收不了尾。
+ * 除此之外的任何会话事件（正文/思考/工具/状态/回放/结束）都算「有动静」。
+ */
+const RECONCILE_NEUTRAL_EVENTS = new Set([
+  'context_usage', 'notification', 'interlude', 'client_message_deduplicated',
+]);
+
+/**
  * @param {object} options
  * @param {object} options.state 共享状态对象
  * @param {(id: string) => Element|null} options.getElement
@@ -48,6 +74,12 @@ const resourceUrl = resourceContentUrl;
  *   state.turn 是否存在。装配层用它补历史；重复触发由消费方防抖合并。它抛错只记日志。
  * @param {((ev: object) => void)|null} [options.onFeedChanged]
  *   全局日报变更广播；必须先于无会话/归属过滤转发，不改变聊天流状态。
+ * @param {((info: object) => void)|null} [options.onIdleReconcile]
+ *   前台恢复对账窗口到期时的旁路通知（窗口内一条事件都没收到、当前会话还在 busy）。
+ *   装配层在这里绕过一次 history-pager 的 busy 门禁取最新一页，再自己判断要不要收尾；
+ *   info.activityToken 是窗口到期时的事件计数，取历史期间又有事件进来就必须放弃。
+ *   它抛错只记日志，不影响连接与渲染。
+ * @param {number} [options.idleReconcileWindowMs] 对账窗口时长（默认 2000ms，理由见常量注释）
  * @param {boolean} [options.debug]
  */
 export function createEventRouter({
@@ -66,6 +98,8 @@ export function createEventRouter({
   onTurnEnd = null,
   onSessionIdle = null,
   onFeedChanged = null,
+  onIdleReconcile = null,
+  idleReconcileWindowMs = DEFAULT_IDLE_RECONCILE_WINDOW_MS,
   debug = false,
 } = {}) {
   if (!state) throw new TypeError('createEventRouter requires { state }');
@@ -147,10 +181,96 @@ export function createEventRouter({
    */
   let lastStatusWasStreaming = false;
 
-  /** 收尾一整轮：通知 → 渲染器收尾 → 刷新上下文用量 → 重置游标。 */
-  function endTurn(ev, { idle = true } = {}) {
+  /* ------------------------------------------------------------------ */
+  /* 前台恢复对账（foreground idle reconcile）                             */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * 本会话收到过多少个事件（只看条数，不看内容）。
+   *
+   * 两个用途：
+   *  - 每条会话事件让它 +1，同时把对账窗口 clear 掉——「窗口内有没有动静」就是靠这个；
+   *  - 取历史是异步的：窗口到期时把这个数字交给装配层，取完再比一次（completeIdleReconcile），
+   *    涨了就说明流还活着，必须放弃收尾。
+   */
+  let sessionEventCount = 0;
+
+  /** 待到期的对账窗口：timer + 开户时的归属。同一时刻最多一个。 */
+  let reconcileTimer = null;
+  let reconcileSession = null;
+
+  /** 作废对账窗口（进后台、切会话、或窗口内真的来了事件）。不碰 busy 与渲染。 */
+  function cancelIdleReconcile() {
+    if (reconcileTimer) {
+      clearTimeout(reconcileTimer);
+      reconcileTimer = null;
+    }
+    reconcileSession = null;
+  }
+
+  /**
+   * 前台恢复后开一个对账窗口。
+   *
+   * 只有一个来源：mobile-lifecycle 的「回到前台 → 强制重连」那一次。开窗时先作废旧窗口，
+   * 所以同一次前台恢复不会排两个；窗口到期自己就没了，不会再排第二次（只有下一次真的
+   * 回到前台才会重新开）。正常前台使用、切会话、发送消息都不会走到这里。
+   *
+   * 到期时三个条件全满足才请装配层放行一次历史补拉：归属没换、当前仍在 busy、
+   * 且这一窗口内一条会话事件都没收到（后者由 handleEvent 收到事件就 clear 这个 timer
+   * 保证）。任何一个不满足就什么都不做（保持现有行为）。
+   */
+  function beginIdleReconcile() {
+    cancelIdleReconcile();
+    const session = state.session;
+    if (!session) return false;
+    reconcileSession = session;
+    const windowMs = Number.isFinite(idleReconcileWindowMs) && idleReconcileWindowMs > 0
+      ? idleReconcileWindowMs
+      : DEFAULT_IDLE_RECONCILE_WINDOW_MS;
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = null;
+      const armedFor = reconcileSession;
+      reconcileSession = null;
+      // 排队期间换了会话 / 退出登录：这次窗口属于旧归属，作废。
+      if (!armedFor || armedFor !== state.session) return;
+      // 已经不忙：不需要对账（正常前台使用、切会话都会走到这里）。
+      if (!state.busy) return;
+      // 「窗口内没有新事件」由 handleEvent 的事件计数 + 取消来保证：只要有会话事件
+      // 进来，这个 timer 早就被 clear 掉了，走不到这里。
+      if (typeof onIdleReconcile !== 'function') return;
+      try {
+        onIdleReconcile({ activityToken: sessionEventCount });
+      } catch (err) {
+        console.error('[app] onIdleReconcile error:', err);
+      }
+    }, windowMs);
+    return true;
+  }
+
+  /**
+   * 对账确认「这一轮其实已经跑完」之后的收尾。
+   *
+   * token 是窗口到期时的事件计数：取历史期间只要又来了一条事件（流还活着，只是回复
+   * 还没落地），就必须放弃收尾并返回 false——屏幕、busy、游标一律不动。
+   *
+   * 收尾本身沿用既有路径（endTurn / finishIdleWithoutTurn），只关掉结束通知与历史旁路：
+   * 完整历史就是这次对账刚刚取回来的那一份，不需要再补一次。
+   */
+  function completeIdleReconcile(token) {
+    if (typeof token === 'number' && token !== sessionEventCount) return false;
+    if (state.turn) endTurn({ type: 'foreground_reconcile' }, { announce: false });
+    else finishIdleWithoutTurn({ announce: false });
+    return true;
+  }
+
+  /** 收尾一整轮：通知 → 渲染器收尾 → 刷新上下文用量 → 重置游标。
+   *
+   * announce=false 只给「前台恢复对账」用：宿主没发结束事件，是历史证明这一轮跑完了，
+   * 这时不该再弹结束通知，也不该再排一次历史补拉（历史刚被对账自己取回来）。
+   */
+  function endTurn(ev, { idle = true, announce = true } = {}) {
     // 旁路通知（手机通知）放在收尾之前：这一刻「刚跑完」的信息还在事件里。
-    if (typeof onTurnEnd === 'function') {
+    if (announce && typeof onTurnEnd === 'function') {
       const info = lastSegmentEnd || turnEndInfo(ev);
       try {
         onTurnEnd(info);
@@ -166,7 +286,7 @@ export function createEventRouter({
     streamState.reset();
     // 本地收尾已完成，宿主也说这一轮结束了：对齐历史的旁路走这里。
     // 被新一段流顶掉旧轮（idle:false）不算「会话空闲」，不能在这里补历史。
-    if (idle) notifySessionIdle();
+    if (announce && idle) notifySessionIdle();
   }
 
   /**
@@ -176,7 +296,7 @@ export function createEventRouter({
    * 这时没有 finishTurn 可走，但残留的流式标记、占位块、busy 都必须收干净，
    * 而且完整回复只能靠历史补回来——所以照样触发 idle 旁路。
    */
-  function finishIdleWithoutTurn() {
+  function finishIdleWithoutTurn({ announce = true } = {}) {
     renderer.endStaleStreamingTurns?.();
     dropPending();
     // 与 endTurn 的收尾边界一致：旧段的结束元数据、true/false 锁存和流游标
@@ -186,7 +306,8 @@ export function createEventRouter({
     lastStatusWasStreaming = false;
     setBusy(false);
     streamState.reset();
-    notifySessionIdle();
+    // announce=false 是前台对账：历史已经由对账自己上屏，不再排第二次补拉。
+    if (announce) notifySessionIdle();
   }
 
   /** 权威空闲旁路：装配层用来对齐历史。它抛错只记日志，不能把收尾搞断。 */
@@ -238,6 +359,25 @@ export function createEventRouter({
   }
 
   /**
+   * 这条事件能不能当作「流还活着 / 有权威运行态」的证据。
+   *
+   * 默认任何会话事件都算。两个例外：
+   *  - 记账类事件（用量/通知/插曲/去重回执）不算；
+   *  - stream_resume 只有带了内嵌事件、或者带了 boolean 的 runtimeIsStreaming 才算。
+   *    空回放且不带运行态正是「宿主什么都没说」：本地 busy 靠它永远清不掉，前台对账
+   *    就是要等这个窗口过去再自己去拿历史对照。带了 false 的旧路径已经会收尾，
+   *    带了 true 则说明还在生成，两者都不需要对账插手。
+   */
+  function isReconcileActivity(ev, type) {
+    if (RECONCILE_NEUTRAL_EVENTS.has(type)) return false;
+    if (type === 'stream_resume') {
+      return (Array.isArray(ev.events) && ev.events.length > 0)
+        || typeof ev.runtimeIsStreaming === 'boolean';
+    }
+    return true;
+  }
+
+  /**
    * 事件入口：先按会话过滤，再交给流式游标。
    * 普通事件（含 done/turn_end）只在这里 observe；stream_resume 自己走回放游标。
    *
@@ -275,6 +415,14 @@ export function createEventRouter({
 
     if (!belongsToSession(ev, state.session)) return;
     const type = ev.type;
+
+    // 只要还有会话事件进来，就说明流还活着（或宿主有权威状态要告诉我们）：
+    // 前台对账窗口立刻作废。记账类事件除外（见 RECONCILE_NEUTRAL_EVENTS）；
+    // 空回放也算「宿主自证没有新事件」，不取消（那正是对账要处理的情形）。
+    if (isReconcileActivity(ev, type)) {
+      sessionEventCount += 1;
+      if (reconcileTimer) cancelIdleReconcile();
+    }
 
     // 同帧回放与外层当前运行态冲突：runtimeIsStreaming:true 说明这一轮还在生成，
     // 回放里的整轮终态只可能是缓存里的旧状态。序号已经由 acceptReplay 推进，这里
@@ -553,5 +701,13 @@ export function createEventRouter({
     }
   }
 
-  return { handleEvent };
+  return {
+    handleEvent,
+    // 前台恢复对账：开窗口 / 作废 / 收尾（见各自的函数注释）。
+    beginIdleReconcile,
+    cancelIdleReconcile,
+    completeIdleReconcile,
+    /** 当前会话的事件计数：装配层用它确认「取历史期间没有新事件」。 */
+    activityCount: () => sessionEventCount,
+  };
 }

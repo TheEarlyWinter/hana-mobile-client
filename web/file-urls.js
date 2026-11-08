@@ -9,8 +9,11 @@
  *
  * 所以：
  *   downloadUrl —— 只在能把文件映射到工作区时给，且一定是白名单地址，否则 null；
- *   readUrl     —— 优先用同一个工作区地址（少一条权限路径），映射不上再退到资源地址。
- *                  两者都没有才返回 null（真的没法读）。
+ *   readUrl     —— 优先用同一个工作区地址（少一条权限路径）；映射不上但有 filePath 时走
+ *                  网关的按路径读 `/gw/file/<b64url(path)>`（宿主对 agent 生成/外部存储的
+ *                  文件在 `/api/resources/<fileId>/content` 上回 400，那是真机上的 400 根因）；
+ *                  都没有才退回资源地址。三者都没有才返回 null（真的没法读）。
+ *                  `/gw/file/…` 只能读，不能当下载地址（壳的下载白名单只认工作区 content）。
  *
  * 纯逻辑 + 一个显式注入的 service；不碰 DOM、不读全局 S。
  */
@@ -161,7 +164,9 @@ export function createSessionFileUrls({
    */
   async function forFile(file) {
     const downloadUrl = await downloadUrlFor(file);
-    const readUrl = downloadUrl || resourceContentUrl(file?.fileId || file?.id);
+    // 映射不到工作区、但条目自带绝对路径：按路径读（网关只读，不参与下载）。
+    const pathUrl = downloadUrl ? null : fileUrlFor(file?.filePath);
+    const readUrl = downloadUrl || pathUrl || resourceContentUrl(file?.fileId || file?.id);
     return { readUrl, downloadUrl };
   }
 

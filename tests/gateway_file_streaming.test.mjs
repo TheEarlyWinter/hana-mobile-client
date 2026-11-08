@@ -580,9 +580,12 @@ await t('会话图片 HEAD：只回元数据，不打开内容流', async () => 
   assert.deepEqual(ops, [], `HEAD 不应打开文件内容（实际：${ops.map((e) => e.op).join(',')}）`);
 });
 
-await t('会话图片：非图片/越界/缺失保持原语义', async () => {
-  const nonImage = await request(fileUrl(docPath), { headers: { cookie: VALID_COOKIE } });
-  assert.equal(nonImage.status, 403);
+await t('会话文件：文档放行、越界/缺失/未登录保持原语义', async () => {
+  // 会话文件卡里的文档现在也走这条路（真机 400 的根因）：txt 必须能按路径读出来。
+  const doc = await request(fileUrl(docPath), { headers: { cookie: VALID_COOKIE } });
+  assert.equal(doc.status, 200, '会话目录里的文档应可读，不再只放行图片');
+  assert.equal(doc.headers['content-type'], 'text/plain; charset=utf-8');
+  assert.equal(doc.body.toString('utf8'), 'not an image');
   const outside = await request(fileUrl(outsidePicPath), { headers: { cookie: VALID_COOKIE } });
   assert.equal(outside.status, 403);
   assert.ok(!outside.body.toString('utf8').includes('OUTSIDE_SECRET'));

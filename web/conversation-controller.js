@@ -14,6 +14,8 @@ import { createHistoryPager } from './history-pager.js';
 import { createHistoryPaginationView } from './history-pagination-view.js';
 import { createScrollMemory } from './scroll-memory.js';
 import { sessionTitle } from './session-list-view.js';
+// mood 块是渲染标记，不属于「回复正文」：对账比较正文前要先剥掉（纯函数，不碰 DOM）。
+import { splitMoodBlock } from './protocol.js';
 
 /**
  * @param {object} options
@@ -296,6 +298,119 @@ export function createConversationController({
   // 首屏/重载是否要等「这一页真的到了」再替换 DOM（见 loadHistory 注释）。
   let historyPendingReplace = false;
 
+  /* ------------------------------------------------------------------ */
+  /* 前台恢复对账（foreground idle reconcile）                            */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * 正在进行的对账。pager 的 onPage 看到它就走对账分支，而不是常规渲染。
+   *
+   * 为什么不能直接复用 loadHistory：重载默认就是「整页替换」，而这时屏上还有
+   * 一轮可能正在生成的实时正文。要先把这一页和实时轮比一下才能决定换不换屏。
+   */
+  let pendingReconcile = null;
+
+  /** 去掉 mood 块与多余空白：实时正文与历史正文的渲染标记不一样，比较前先归一。 */
+  function comparableText(raw) {
+    if (typeof raw !== 'string' || !raw) return '';
+    const { body } = splitMoodBlock(raw);
+    return String(body || '').replace(/\s+/g, ' ').trim();
+  }
+
+  /** 一条历史条目里的 assistant 正文（只认 text 块；工具/卡片/思考不参与比较）。 */
+  function assistantTextOf(entry) {
+    const msg = entry?.message || entry;
+    if (!msg || typeof msg !== 'object' || msg.role !== 'assistant') return '';
+    const content = msg.content;
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return typeof msg.text === 'string' ? msg.text : '';
+    let out = '';
+    for (const block of content) {
+      if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
+      if (block.type === 'text' && typeof block.text === 'string') out += block.text;
+    }
+    return out;
+  }
+
+  /** 这一页历史里最后一条 assistant 正文；没有就是空串。 */
+  function lastAssistantText(page) {
+    let last = '';
+    for (const entry of page?.entries || []) {
+      const text = assistantTextOf(entry);
+      if (text) last = text;
+    }
+    return last;
+  }
+
+  /**
+   * 历史里的回复是不是「比屏上这一轮更新/更完整」。
+   *
+   * 判据刻意保守（宁可继续等，也不误伤真正在跑的流）：
+   *  - 屏上还没有正文（等首字、只有思考）→ 没有可对照的内容，一律不算；这时真正的
+   *    权威信号（status:false / runtimeIsStreaming:false）会走既有路径收尾；
+   *  - 历史正文与实时正文相等 / 历史更短 / 对不上 → 没有新内容，只合并不收尾；
+   *  - 历史正文包含屏上这段实时正文、并且真的更长 → 离线期间已经生成完毕，可以收尾。
+   * 「包含」而不「相等」：实时正文可能只是多段正文里最后一段（中间穿插过工具），
+   * 也可能带着 mood 块，逐字相等永远对不上。
+   */
+  function hasNewerCompleteReply(page) {
+    const live = comparableText(state.streamingRaw);
+    if (!live) return false;
+    const history = comparableText(lastAssistantText(page));
+    if (!history || history.length <= live.length) return false;
+    return history.includes(live);
+  }
+
+  /**
+   * 对账拿到最新一页后的判断：要不要按「整轮跑完」收尾换屏。
+   * 任何一条自证条件不满足都返回 false（只合并不收尾）。
+   */
+  function applyReconcileDecision(reconcile, page) {
+    // 取历史期间用户切了会话 / 登出：这页属于旧归属，不能落到新会话头上。
+    if (!state.session || reconcile.session !== state.session) return false;
+    if (reconcile.epoch !== navEpoch) return false;
+    // 已经不忙了（权威 idle / 用户中止已经收过尾）：没有要对账的东西。
+    if (!state.busy) return false;
+    // 只吃最新一页：更早页的内容与「这一轮跑完没有」无关。
+    if (page?.prepend) return false;
+    // 取历史期间又来了一条事件：流还活着，立刻放弃（装配层传进来的复核）。
+    if (typeof reconcile.isStillQuiet === 'function' && !reconcile.isStillQuiet()) return false;
+    return hasNewerCompleteReply(page);
+  }
+
+  /**
+   * 前台恢复对账的入口（app 在 event-router 的对账窗口到期时调）。
+   *
+   * 只做一件事：绕过一次 history-pager 的 busy 门禁，把最新一页取回来。
+   * 要不要收尾、要不要换屏全在拿到这一页之后判断（见 onPage 里的 pendingReconcile 分支），
+   * 绝不先清 busy 再取、也不先换屏再判断。
+   *
+   * @param {object} [options]
+   * @param {(() => boolean)|null} [options.isStillQuiet] 取历史期间「一条事件都没来」的复核
+   * @param {(() => void)|null} [options.onRecovered] 历史证明这一轮已跑完时的收尾回调
+   * @returns {Promise<boolean>} 是否按「跑完了」收尾并换屏
+   */
+  async function reconcileAfterForeground({ isStillQuiet = null, onRecovered = null } = {}) {
+    const session = state.session;
+    if (!session) return false;
+    // 已经不忙（正常前台使用）：这条对账根本不需要动手，也不该发请求。
+    if (!state.busy) return false;
+    // 上一次对账还没落地（网络慢）：不叠加第二次请求。
+    if (pendingReconcile) return false;
+    const reconcile = { session, epoch: navEpoch, isStillQuiet, onRecovered, recovered: false };
+    pendingReconcile = reconcile;
+    try {
+      await historyPager.open(session, { bypassBusy: true });
+    } catch (err) {
+      // open 不 reject（错误走 onState），这里只兜真出意外的装配错误。
+      flash('前台恢复对账失败：' + (err?.message || String(err)));
+    } finally {
+      // open 失败/被拦时 onPage 不会来：标记必须自己收掉，否则会留给下一次普通重载。
+      if (pendingReconcile === reconcile) pendingReconcile = null;
+    }
+    return reconcile.recovered === true;
+  }
+
   function showSkeleton() {
     const el = getElement('chatSkeleton');
     if (el) el.hidden = false;
@@ -313,6 +428,28 @@ export function createConversationController({
     // 插节点，不动实时轮；'open'（首屏 / 重载）仍是整页替换，生成中照旧拦住。
     canLoad: (kind) => (kind === 'older' ? true : !state.busy),
     onPage: (page) => {
+      // 前台对账取回来的这一页：先判断要不要收尾换屏，再决定走不走常规渲染。
+      const reconcile = pendingReconcile;
+      if (reconcile) {
+        pendingReconcile = null;
+        const recovered = applyReconcileDecision(reconcile, page);
+        // 这一次 open 的机会已经用掉了：早先被 busy 拦下的「原会话重载」不能借这一页
+        // 把屏上内容顺手替换掉（否则「只合并」就成了整页丢失）。
+        historyPendingReplace = false;
+        if (!recovered) {
+          // 只合并、不收尾：这一页不比屏上更新（离线期间没跑出新回复）。
+          // 整页替换会把正在生成的实时轮丢掉，所以刻意不碰 DOM，busy 也保持原样；
+          // 真正的收尾等宿主的权威 idle（或下一次前台恢复）再走既有路径。
+          // 游标/hasMore 已经由 pager 推进，直接返回不会把分页卡死。
+          hideSkeleton();
+          historyPageRendered = true;
+          return;
+        }
+        // 历史里有比屏上更完整的回复：走既有「原会话重载」路径换屏——
+        // renderHistoryPage 的页边界会把实时轮指针让给历史轮（preserveLiveTurn 那套），
+        // 不丢已经上屏的卡片/文件，也不给下一个 delta 留脏指针。
+        historyPendingReplace = true;
+      }
       // 只有真的拿到一页（并且 pager 已经过了 busy 复核）才动 DOM。
       if (historyPendingReplace && page && !page.prepend) {
         historyPendingReplace = false;
@@ -321,6 +458,15 @@ export function createConversationController({
       hideSkeleton();
       historyPageRendered = true;
       renderHistoryPage(page);
+      if (reconcile) {
+        reconcile.recovered = true;
+        // 换屏之后才收尾：这时屏上是权威历史，清 busy/游标不会把半截内容当成完成。
+        try {
+          reconcile.onRecovered?.();
+        } catch (err) {
+          flash('前台恢复对账收尾失败：' + (err?.message || String(err)));
+        }
+      }
     },
     onState: (pagerState) => {
       if (pagerState?.error) hideSkeleton();
@@ -515,6 +661,8 @@ export function createConversationController({
     newSession,
     openSession,
     loadHistory,
+    // 前台恢复对账（app 在 event-router 的对账窗口到期时调）
+    reconcileAfterForeground,
     backToList,
     chatSubtitle,
     renderHistoryPage,

@@ -33,6 +33,15 @@ export const MIME = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mp3': 'audio/mpeg',
+  // 会话文件卡里的文档（/gw/file 按路径读）：类型必须说准，预览面板按它分流。
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8',
 };
 
 /** 路径里的 base64url 段解码（卡片 id 与会话文件 id 都用它）。 */

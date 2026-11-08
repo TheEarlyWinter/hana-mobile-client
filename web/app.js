@@ -1646,6 +1646,15 @@ const router = createEventRouter({
   },
   // 宿主确认当前会话已空闲（整轮收尾，或没有活动轮但运行态已停）：对齐一次历史。
   onSessionIdle: () => scheduleHistorySync(),
+  // 前台恢复对账：窗口到期（这段时间一条事件都没来）且仍在生成时，放行一次历史补拉。
+  // 判断全在 conversation-controller：拿回来的历史如果比屏上这一轮更完整，才走整轮收尾；
+  // 否则只合并不收尾。activityToken 用来在取历史期间再确认一次「真的没有再新事件」。
+  onIdleReconcile: ({ activityToken }) => {
+    void conv.reconcileAfterForeground({
+      isStillQuiet: () => router.activityCount() === activityToken,
+      onRecovered: () => router.completeIdleReconcile(activityToken),
+    });
+  },
   // 全局日报广播在 event-router 的会话归属过滤前转发。
   onFeedChanged: () => { void features?.get('feed')?.onChanged?.(); },
   debug: DEBUG,
@@ -2159,6 +2168,10 @@ const lifecycle = createMobileLifecycle({
   renderer,
   sockets,
   connectWS,
+  // 回到前台的那一次重连之后开一个对账窗口（窗口时长在 event-router 的常量里，2s）；
+  // 进后台/失焦/卸载时把窗口一起作废。正常前台使用、切会话、发送消息都不会开窗。
+  onForegroundResume: () => { router.beginIdleReconcile(); },
+  onForegroundSuspend: () => { router.cancelIdleReconcile(); },
   actionConfirmation,
   sessionListController,
   namespaceTabs,
