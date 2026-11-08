@@ -63,6 +63,9 @@ function staticImports(source) {
     /\bimport\s+[^'"()]*?from\s*['"]([^'"]+)['"]/g,
     /\bimport\s*['"]([^'"]+)['"]/g,
     /\bexport\s+[^'"()]*?from\s*['"]([^'"]+)['"]/g,
+    // 动态 import 也算可达：它会被 esbuild 切成分块，仍是包的一部分，只是按需下载。
+    // 不算进来的话，PDF 预览（pdf.js 不能进主包）就只能进白名单，反而失去守卫意义。
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
   ];
   for (const re of patterns) {
     let m;

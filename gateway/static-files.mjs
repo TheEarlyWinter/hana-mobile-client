@@ -145,7 +145,10 @@ async function indexBody(filePath, manifest) {
 
 function cacheControlFor({ isDist, ext, base, manifest }) {
   if (isDist) {
-    const contentAddressed = Boolean(manifest) && (base === manifest.js || base === manifest.css);
+    // 清单里的 js / css / 分块都是内容寻址的（名字里带内容哈希），可以发 immutable。
+    const contentAddressed = Boolean(manifest)
+      && (base === manifest.js || base === manifest.css
+        || (Array.isArray(manifest.chunks) && manifest.chunks.includes(base)));
     return contentAddressed ? IMMUTABLE : DIST_NO_STORE;
   }
   return TEXT_ASSET.test(ext) ? NO_STORE : 'no-cache';

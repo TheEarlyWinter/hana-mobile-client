@@ -30,6 +30,9 @@ export const ASSET_NAME = {
   css: /^app\.[0-9a-f]{8}\.css$/,
 };
 
+/** 按需分块（esbuild splitting）的名字：chunk-<内容哈希>.js，可能带 .map。 */
+export const CHUNK_NAME = /^chunk-[A-Z0-9]+\.js(\.map)?$/;
+
 export function distDir(webRoot) {
   return path.join(webRoot, DIST_DIRNAME);
 }
@@ -56,9 +59,14 @@ export async function readDistManifest(webRoot) {
   const js = typeof parsed.js === 'string' ? parsed.js : '';
   const css = typeof parsed.css === 'string' ? parsed.css : '';
   if (!ASSET_NAME.js.test(js) || !ASSET_NAME.css.test(css)) return null;
+  // 按需分块：只取形状对的 js / map 名字，别的一律忽略（清单可能被手改或写坏）。
+  const chunks = Array.isArray(parsed.chunks)
+    ? parsed.chunks.filter((name) => typeof name === 'string' && CHUNK_NAME.test(name))
+    : [];
   return {
     js,
     css,
+    chunks,
     builtAt: typeof parsed.builtAt === 'string' ? parsed.builtAt : '',
     hash: typeof parsed.hash === 'string' ? parsed.hash : '',
   };

@@ -1,0 +1,137 @@
+/* web/pdf-preview.css — 内置 PDF 预览（web/pdf-preview.js）
+ *
+ * 约定：
+ *  - 类名一律 pdf- 前缀，不碰其它面板的选择器；
+ *  - 只用主题里的 CSS 变量（web/themes/warm-paper.css / dark.css），不写死颜色，
+ *    深色主题自动生效；
+ *  - 360–430px 宽可用：canvas 恒定 width:100% + height:auto，永远不会横向溢出。
+ */
+
+.pdf-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 工具条：滚动容器是上层预览面板（.file-preview-body），sticky 让它留在顶部 */
+.pdf-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-12);
+  padding: var(--space-6) var(--space-2);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.pdf-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--overlay-subtle);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-title);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pdf-btn:active {
+  background: var(--overlay-medium);
+}
+
+.pdf-btn:disabled {
+  opacity: .38;
+  background: transparent;
+  cursor: default;
+}
+
+.pdf-counter {
+  min-width: 4.5em;
+  text-align: center;
+  color: var(--text-light);
+  font-family: var(--font-ui);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 页列表：宽度由宿主决定，高度随内容长（由上层面板滚动） */
+.pdf-scroll {
+  min-width: 0;
+  padding: 0;
+}
+
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+.pdf-page {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  box-shadow: 0 1px 2px var(--shadow);
+  overflow: hidden;
+}
+
+/* 还没画出来的页：先按 A4 比例占位，滚动位置不会因为后渲染而跳 */
+.pdf-page:not(.is-ready) {
+  aspect-ratio: 1 / 1.414;
+  background: var(--overlay-subtle);
+  box-shadow: none;
+}
+
+.pdf-page-index {
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--fs-micro);
+  opacity: .7;
+}
+
+.pdf-page-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+.pdf-page.is-failed {
+  aspect-ratio: auto;
+  padding: var(--space-16) var(--space-12);
+  border: 1px dashed var(--border);
+  background: var(--danger-bg);
+}
+
+.pdf-page-error {
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--fs-hint);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.pdf-hint {
+  flex: 0 0 auto;
+  padding: var(--space-10) var(--space-2) var(--space-4);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--fs-hint);
+  text-align: center;
+}

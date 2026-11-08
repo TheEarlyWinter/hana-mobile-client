@@ -13,72 +13,28 @@
  */
 
 import { isMobileDownloadUrl, startDownload } from './download.js';
+import { openZip } from './zip-reader.js';
+import { mountXlsx } from './xlsx-preview.js';
+import { mountPptx } from './pptx-preview.js';
 
 const TEXT_EXTS = new Set([
   'txt', 'log', 'csv', 'tsv', 'json', 'yml', 'yaml', 'xml', 'html', 'css',
   'js', 'mjs', 'ts', 'py', 'java', 'c', 'h', 'cpp', 'go', 'rs', 'sh', 'ps1', 'sql', 'ini', 'conf',
 ]);
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif']);
-const SHEET_EXTS = new Set(['xlsx', 'xls', 'pptx', 'ppt', 'pdf']);
+const OFFICE_EXTS = new Set(['xlsx', 'pptx', 'pdf']);
+// 老二进制格式（doc/xls/ppt）和 CSv 以外的表格都不在这里：它们没有 OOXML 结构可解。
+const UNSUPPORTED_EXTS = new Set(['xls', 'ppt', 'doc']);
 
 export function previewKind(ext) {
   const e = String(ext || '').toLowerCase();
   if (IMAGE_EXTS.has(e)) return 'image';
   if (e === 'md' || e === 'markdown') return 'markdown';
   if (e === 'docx') return 'docx';
+  if (OFFICE_EXTS.has(e)) return e;
   if (TEXT_EXTS.has(e)) return 'text';
-  if (SHEET_EXTS.has(e)) return 'unsupported';
+  if (UNSUPPORTED_EXTS.has(e)) return 'unsupported';
   return 'unknown';
-}
-
-/* ------------------------------ zip（只读） ------------------------------ */
-
-function findEocd(view) {
-  // End of central directory：签名 0x06054b50，注释最长 65535，从尾部往前找
-  const max = Math.min(view.byteLength, 66_000);
-  for (let i = view.byteLength - 22; i >= view.byteLength - max; i -= 1) {
-    if (view.getUint32(i, true) === 0x06054b50) return i;
-  }
-  return -1;
-}
-
-function listZipEntries(buffer) {
-  const view = new DataView(buffer);
-  const eocd = findEocd(view);
-  if (eocd < 0) throw new Error('不是有效的 zip');
-  const count = view.getUint16(eocd + 10, true);
-  let offset = view.getUint32(eocd + 16, true);
-  const decoder = new TextDecoder('utf-8');
-  const entries = new Map();
-
-  for (let i = 0; i < count; i += 1) {
-    if (view.getUint32(offset, true) !== 0x02014b50) break;
-    const method = view.getUint16(offset + 10, true);
-    const compressedSize = view.getUint32(offset + 20, true);
-    const nameLen = view.getUint16(offset + 28, true);
-    const extraLen = view.getUint16(offset + 30, true);
-    const commentLen = view.getUint16(offset + 32, true);
-    const localOffset = view.getUint32(offset + 42, true);
-    const name = decoder.decode(new Uint8Array(buffer, offset + 46, nameLen));
-    entries.set(name, { method, compressedSize, localOffset });
-    offset += 46 + nameLen + extraLen + commentLen;
-  }
-  return entries;
-}
-
-async function readZipEntry(buffer, meta) {
-  const view = new DataView(buffer);
-  const at = meta.localOffset;
-  if (view.getUint32(at, true) !== 0x04034b50) throw new Error('zip 条目头损坏');
-  const nameLen = view.getUint16(at + 26, true);
-  const extraLen = view.getUint16(at + 28, true);
-  const start = at + 30 + nameLen + extraLen;
-  const raw = new Uint8Array(buffer, start, meta.compressedSize);
-  if (meta.method === 0) return new TextDecoder('utf-8').decode(raw);
-  if (meta.method !== 8) throw new Error('不支持的压缩方式');
-  if (typeof DecompressionStream !== 'function') throw new Error('浏览器不支持解压');
-  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Response(stream).text();
 }
 
 /* ------------------------------ docx ------------------------------ */
@@ -116,11 +72,9 @@ export function docxToParagraphs(xml) {
 async function loadDocx(url) {
   const res = await fetch(url, { credentials: 'same-origin' });
   if (!res.ok) throw new Error('文件读取失败（' + res.status + '）');
-  const buffer = await res.arrayBuffer();
-  const entries = listZipEntries(buffer);
-  const target = entries.get('word/document.xml');
-  if (!target) throw new Error('这个 docx 里没有正文');
-  const xml = await readZipEntry(buffer, target);
+  const zip = openZip(await res.arrayBuffer());
+  const xml = await zip.text('word/document.xml');
+  if (!xml) throw new Error('这个 docx 里没有正文');
   return docxToParagraphs(xml);
 }
 
@@ -152,6 +106,7 @@ function ensureSheet() {
 
   const close = () => {
     previewGeneration += 1;   // 在途读取全部作废，迟到响应不再写隐藏面板
+    dropMounted();            // 表格/幻灯/PDF 的渲染要收尾（监听、定时器、canvas 内存）
     root.hidden = true;
     root.querySelector('.file-preview-body').innerHTML = '';
     document.body.classList.remove('file-preview-open');
@@ -168,6 +123,22 @@ function setBody(node) {
   s.body.innerHTML = '';
   s.body.appendChild(node);
   s.body.scrollTop = 0;
+}
+
+/* 当前挂载的预览器（xlsx / pptx / pdf）。换文件、关闭都要先销毁上一个，
+ * 否则 PDF 的 canvas 与滚动监听会跟着面板一直留着。 */
+let mounted = null;
+
+function dropMounted() {
+  const handle = mounted;
+  mounted = null;
+  if (handle && typeof handle.destroy === 'function') {
+    try {
+      handle.destroy();
+    } catch {
+      // 销毁失败不能影响关闭：面板已经要关了，没东西值得为它停下来
+    }
+  }
 }
 
 function note(text, action) {
@@ -281,16 +252,45 @@ export async function openFilePreview({ file, readUrl, downloadUrl = null, rende
       return;
     }
 
+    if (kind === 'xlsx' || kind === 'pptx' || kind === 'pdf') {
+      // 换文件时先把上一个预览器收掉：它的 canvas / 监听不能跟着新文件继续活着。
+      dropMounted();
+      const box = document.createElement('div');
+      box.className = 'file-preview-doc file-preview-embed';
+      setBody(box);
+
+      if (kind === 'pdf') {
+        // pdf.js 是 1MB 级，故意用动态 import：它必须留在按需分块里，不能进主包。
+        const { mountPdf } = await import('./pdf-preview.js');
+        if (!isCurrent()) return;
+        mounted = await mountPdf({ url: readUrl, container: box });
+        if (!isCurrent()) { dropMounted(); return; }
+        return;
+      }
+
+      const res = await fetch(readUrl, { credentials: 'same-origin' });
+      if (!isCurrent()) return;
+      if (!res.ok) throw new Error('文件读取失败（' + res.status + '）');
+      const zip = openZip(await res.arrayBuffer());
+      if (!isCurrent()) return;
+      mounted = kind === 'xlsx'
+        ? await mountXlsx({ zip, container: box })
+        : await mountPptx({ zip, container: box });
+      if (!isCurrent()) { dropMounted(); return; }
+      return;
+    }
+
     if (!isCurrent()) return;
 
     if (kind === 'unsupported') {
-      setBody(fallbackNotice('这个格式没法在手机里直接渲染。下载后用系统应用打开。', label, downloadUrl));
+      setBody(fallbackNotice('这是 Office 97-2003 的老格式，手机里解不了。下载后用系统应用打开。', label, downloadUrl));
       return;
     }
 
     setBody(fallbackNotice('没有内置预览。可以下载后查看。', label, downloadUrl));
   } catch (err) {
     if (!isCurrent()) return;
+    dropMounted();
     setBody(fallbackNotice('打不开：' + (err.message || String(err)), label, downloadUrl));
   }
 }

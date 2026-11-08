@@ -70,6 +70,12 @@ async function distEntries() {
   return (await fs.readdir(dist)).sort();
 }
 
+/** 这一批应该在磁盘上的全部文件（入口 + 样式 + 按需分块 + 清单）。 */
+function expectedEntries(manifest) {
+  const chunks = Array.isArray(manifest.chunks) ? manifest.chunks : [];
+  return [manifest.css, manifest.js, `${manifest.js}.map`, 'manifest.json', ...chunks].sort();
+}
+
 // 产物可能还没建（干净检出），也允许已经是最新的：先对齐到「构建过一次」的状态。
 let state = await webBundleState(webRoot);
 if (state.missing || state.stale) {
@@ -102,7 +108,7 @@ try {
     assert.ok(Number.isFinite(Date.parse(manifest.builtAt)), `builtAt 必须是可解析时间：${manifest.builtAt}`);
 
     const entries = await distEntries();
-    assert.deepEqual(entries, [manifest.css, manifest.js, `${manifest.js}.map`, 'manifest.json'].sort());
+    assert.deepEqual(entries, expectedEntries(manifest));
   });
 
   await t('2. 同一份源码连构两次，名字与总哈希不变', async () => {
@@ -113,7 +119,7 @@ try {
     assert.equal(after.js, before.js, 'js 文件名变了：内容哈希没有稳定下来');
     assert.equal(after.css, before.css, 'css 文件名变了：内容哈希没有稳定下来');
     assert.equal(after.hash, before.hash, '总哈希变了');
-    assert.deepEqual(await distEntries(), [after.css, after.js, `${after.js}.map`, 'manifest.json'].sort());
+    assert.deepEqual(await distEntries(), expectedEntries(after));
     manifest = after;
   });
 
@@ -156,8 +162,22 @@ try {
     }
   });
 
-  await t('7. 清单本身与 dist 下的其它文件不能进缓存', async () => {
-    const manifestRes = await request(port, '/dist/manifest.json');
+  await t('6b. 按需分块（chunk-*）也是内容寻址，发 immutable', async () => {
+    const chunks = (manifest.chunks || []).filter((name) => name.endsWith('.js'));
+    assert.ok(chunks.length > 0, '有动态 import（pdf 预览）就应该切出至少一个分块');
+    for (const name of chunks) {
+      assert.match(name, /^chunk-[A-Z0-9]+\.js$/, `分块名形状不对：${name}`);
+      const res = await request(port, `/dist/${name}`);
+      assert.equal(res.status, 200, `${name} 应 200`);
+      assert.equal(res.headers['cache-control'], IMMUTABLE, `${name} 必须是可以长期缓存的产物`);
+    }
+    // 不在清单里的同形名字：不能因为“看起来像分块”就给内容，也不能给长缓存
+    const ghost = await request(port, '/dist/chunk-ZZZZZZZZ.js');
+    assert.equal(ghost.status, 404, '未登记的分块名不能拿到任何字节');
+    assert.equal(ghost.headers['cache-control'], 'no-store');
+  });
+
+  await t('7. 清单本身与 dist 下的其它文件不能进缓存', async () => {    const manifestRes = await request(port, '/dist/manifest.json');
     assert.equal(manifestRes.status, 200);
     assert.equal(manifestRes.headers['cache-control'], 'no-store');
 

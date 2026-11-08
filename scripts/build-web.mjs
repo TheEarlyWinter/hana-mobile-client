@@ -55,6 +55,11 @@ export const STYLES = [
   'pending-state.css',
   'feed/feed.css',
   'subagent-sheet.css',
+  // 文件预览：docx 用 file-preview 自带样式；xlsx / pptx / pdf 各自一份，
+  // 只在打开对应文件时才用得上，但样式表不切分（总量小于 10KB，合并比多一次请求划算）。
+  'xlsx-preview.css',
+  'pptx-preview.css',
+  'pdf-preview.css',
   'toast.css',
   'themes/dark.css',
 ];
@@ -98,13 +103,18 @@ function jsOptions({ watch = false } = {}) {
     target: ['chrome100', 'safari15'],
     platform: 'browser',
     outdir: outDir,
+    // 按需加载的分块：PDF 预览要引 pdf.js（1MB 级），不能塞进主包拖慢每次冷启动。
+    // 开切分后，`await import()` 的模块会单独出一个包；包名自带内容哈希（chunk-XXXXXXXX.js），
+    // 所以它们也能按 immutable 缓存——前提是清单里登记（网关靠清单认「内容寻址」）。
+    splitting: true,
+    chunkNames: 'chunk-[hash]',
     // 弱网下字节数也算钱：网关不做 gzip，就靠这里压掉空白与注释
     minify: true,
     sourcemap: 'linked',
     legalComments: 'none',
     logLevel: 'warning',
     metafile: true,
-    plugins: watch ? [manifestPlugin()] : [],
+    plugins: [outputsPlugin(), ...(watch ? [manifestPlugin()] : [])],
   };
 }
 
@@ -168,12 +178,60 @@ function assertName(kind, name) {
   if (!ASSET_NAME[kind].test(name)) throw new Error(`产物名不符合约定（${kind}）：${name}`);
 }
 
-async function writeManifest({ js, css, builtAt }) {
+async function writeManifest({ js, css, chunks, builtAt }) {
   assertName('js', js);
   assertName('css', css);
-  const manifest = { js, css, builtAt: builtAt.toISOString(), hash: hash8(`${js}:${css}`) };
+  const manifest = {
+    js,
+    css,
+    // 动态 import 切出来的分块（当前只有 pdf.js 那一份）。没有就是空数组。
+    chunks: Array.isArray(chunks) ? chunks : [],
+    builtAt: builtAt.toISOString(),
+    hash: hash8(`${js}:${css}:${(chunks || []).join(',')}`),
+  };
   await fsp.writeFile(path.join(outDir, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   return manifest;
+}
+
+/**
+ * 记下这次构建到底产了哪些文件（以 esbuild 的 metafile 为准）。
+ * 不能用「扫 outdir」的写法：上一版的分块还在目录里，会被当成本次产物保留下来，
+ * 跨构建越积越多（实测积到 2.5MB 且全进了清单）。
+ */
+let lastOutputs = [];
+
+function recordBuildOutputs(result) {
+  const outputs = result?.metafile?.outputs;
+  if (!outputs) return;
+  lastOutputs = Object.keys(outputs).map((abs) => path.basename(abs));
+}
+
+function outputsPlugin() {
+  return {
+    name: 'capture-outputs',
+    setup(buildApi) {
+      buildApi.onEnd((result) => {
+        if (result?.errors?.length) return;
+        recordBuildOutputs(result);
+      });
+    },
+  };
+}
+
+/**
+ * esbuild 切出来的分块：除入口与样式之外，本次构建真正产出的 js / map。
+ * 名字已经带内容哈希，不再改名——改一次就要连带改写入口里的引用，得不偿失。
+ */
+async function collectChunks() {
+  const names = new Set();
+  for (const entry of lastOutputs) {
+    if (!entry.endsWith('.js') && !entry.endsWith('.js.map')) continue;
+    if (entry === TMP_JS || entry === TMP_MAP) continue;
+    // 入口已经发布成哈希名，不是分块。
+    if (/^app\.[0-9a-f]{8}\.js(\.map)?$/.test(entry)) continue;
+    names.add(entry);
+  }
+  return Array.from(names).sort();
 }
 
 /** 只留这一批：固定名的旧产物、上一版的哈希文件都清掉，不留垃圾。 */
@@ -192,9 +250,11 @@ async function pruneOutDir(keep) {
 async function finalizeDist({ builtAt = new Date() } = {}) {
   const script = await publishScript();
   const styles = await publishStyles();
-  const manifest = await writeManifest({ js: script.name, css: styles.name, builtAt });
-  await pruneOutDir([script.name, script.mapName, styles.name]);
-  return { manifest, sizes: { [script.name]: script.bytes, [styles.name]: styles.bytes } };
+  const chunks = await collectChunks();
+  const manifest = await writeManifest({ js: script.name, css: styles.name, chunks, builtAt });
+  await pruneOutDir([script.name, script.mapName, styles.name, ...chunks]);
+  const sizes = { [script.name]: script.bytes, [styles.name]: styles.bytes };
+  return { manifest, sizes };
 }
 
 /** watch 模式下两个 esbuild 上下文各自触发；串起来跑，避免同时改名/删文件。 */

@@ -123,6 +123,8 @@ const ALLOWLIST = Object.freeze([
   'tests/new_session_label.test.mjs',
   'tests/new_session_single_flight.test.mjs',
   'tests/notifications.test.mjs',
+  'tests/pdf_preview.test.mjs',
+  'tests/pptx_preview.test.mjs',
   'tests/protocol.test.mjs',
   'tests/reference_block.test.mjs',
   'tests/search_metadata_contract.test.mjs',
@@ -152,6 +154,7 @@ const ALLOWLIST = Object.freeze([
   'tests/workspace_service.test.mjs',
   'tests/workspace_view.test.mjs',
   'tests/ws_reconnect_generation.test.mjs',
+  'tests/xlsx_preview.test.mjs',
 ]);
 
 // 未纳入审计门禁的 tests/*.test.mjs，逐个登记；reason 必须写清「为什么不能进快速离线门禁」。

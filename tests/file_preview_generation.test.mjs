@@ -18,7 +18,7 @@ h.setFetch((url) => new Promise((resolve) => {
   pendings.set(String(url), resolve);
 }));
 
-const { openFilePreview, closeFilePreview } = await import('../web/file-preview.js');
+const { openFilePreview, closeFilePreview, previewKind } = await import('../web/file-preview.js');
 
 const WS = '/api/mobile/workspace/content';
 const textResponse = (body) => ({
@@ -97,8 +97,8 @@ await t('关闭后迟到的响应不再写隐藏面板', async () => {
 
 await t('只拿得到资源地址：正文照常读，但不给下载按钮', async () => {
   const readUrl = '/api/resources/sf_1/content';
-  // pdf 属于「不支持在线渲染」，不拉取内容，直接走兑底提示
-  await openFilePreview({ file: { label: 'x.pdf', ext: 'pdf' }, readUrl });
+  // xls 是 Office 97-2003 的老二进制格式，解不了，直接走兑底提示（xlsx/pptx/pdf 已有内置预览）
+  await openFilePreview({ file: { label: 'x.xls', ext: 'xls' }, readUrl });
 
   assert.equal(
     h.doc.body.querySelector('.file-preview-download'),
@@ -106,9 +106,21 @@ await t('只拿得到资源地址：正文照常读，但不给下载按钮', as
     '非白名单地址不能给一个点了必错的下载按钮',
   );
   assert.ok(
-    /这个格式没法在手机里直接渲染/.test(bodyText()),
+    /老格式/.test(bodyText()),
     `预览本身要能用（只是下不了），实际：${bodyText()}`,
   );
+});
+
+await t('预览分流：xlsx / pptx / pdf 走内置预览，xls / ppt / doc 仍走兑底', () => {
+  // 这里只锁分流表本身：真渲染由 xlsx_preview / pptx_preview / pdf_preview 各自测。
+  const cases = [
+    ['xlsx', 'xlsx'], ['pptx', 'pptx'], ['pdf', 'pdf'],
+    ['xls', 'unsupported'], ['ppt', 'unsupported'], ['doc', 'unsupported'],
+    ['XLSX', 'xlsx'],
+  ];
+  for (const [ext, want] of cases) {
+    assert.equal(previewKind(ext), want, `${ext} 应该分流到 ${want}，实际 ${previewKind(ext)}`);
+  }
 });
 
 await t('资源读地址 + 文本文件：能读出正文，且没有下载入口', async () => {
@@ -123,9 +135,9 @@ await t('资源读地址 + 文本文件：能读出正文，且没有下载入�
 });
 
 await t('工作区地址：给下载按钮，点击走统一的下载入口（导航）', async () => {
-  const url = `${WS}?mountId=m&name=y.pdf`;
+  const url = `${WS}?mountId=m&name=y.xls`;
   globalThis.location.href = 'http://localhost:8080/';
-  await openFilePreview({ file: { label: 'y.pdf', ext: 'pdf' }, readUrl: url, downloadUrl: url });
+  await openFilePreview({ file: { label: 'y.xls', ext: 'xls' }, readUrl: url, downloadUrl: url });
 
   const link = h.doc.body.querySelector('.file-preview-download');
   assert.ok(link, '工作区地址应给出下载按钮');

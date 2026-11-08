@@ -1,0 +1,217 @@
+/* pptx-preview.css — 手机端 .pptx 文本级预览
+ *
+ * 只用主题里已存在的自定义属性（--bg-card / --text / --accent …），
+ * 颜色全部跟着主题走，深色由 themes/dark.css 覆盖，这里不写死任何色值。
+ * 目标宽度 360–430px：不留固定宽度，长文本靠 overflow-wrap 与 word-break 换行。
+ */
+
+.pptx-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+  min-width: 0;
+  font-family: var(--font-ui);
+  color: var(--content-document-ink);
+}
+
+/* 顶部页码导航：跟着预览面板的滚动走，任何时候都能翻页 */
+.pptx-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-10);
+  background: var(--bg-glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 2px var(--shadow);
+  backdrop-filter: blur(6px);
+}
+
+.pptx-nav-btn {
+  flex: 0 0 auto;
+  min-width: 62px;
+  padding: var(--space-6) var(--space-10);
+  font: inherit;
+  font-size: var(--fs-ui);
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--accent-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pptx-nav-btn:disabled {
+  opacity: 0.42;
+}
+
+/* 按钮文案不折行：360px 上「上一页/下一页」一断行，导航条高度就会跳 */
+.pptx-prev,
+.pptx-next {
+  white-space: nowrap;
+}
+
+.pptx-nav-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-light);
+}
+
+.pptx-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  min-width: 0;
+}
+
+/* 一页一片：卡片加左侧色条，页与页之间一眼分得开 */
+.pptx-page {
+  min-width: 0;
+  padding: var(--space-14) var(--space-14) var(--space-12);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid rgba(var(--accent-rgb), 0.45);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px var(--shadow);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.pptx-page-current {
+  border-left-color: var(--accent);
+  box-shadow: 0 2px 10px var(--shadow);
+}
+
+.pptx-page-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-8);
+  font-size: var(--fs-hint);
+  letter-spacing: 0.04em;
+  color: var(--text-light);
+  text-transform: uppercase;
+}
+
+.pptx-page-no {
+  padding: 1px var(--space-6);
+  background: var(--accent-light);
+  border-radius: var(--radius-xs);
+}
+
+.pptx-page-title {
+  margin: 0 0 var(--space-10);
+  font-family: var(--font-serif);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--content-document-ink);
+  overflow-wrap: anywhere;
+}
+
+.pptx-points {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pptx-point {
+  position: relative;
+  min-width: 0;
+  padding-left: var(--space-12);
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  color: var(--content-secondary-ink);
+  overflow-wrap: anywhere;
+}
+
+.pptx-point::before {
+  content: '·';
+  position: absolute;
+  left: var(--space-2);
+  color: var(--accent);
+}
+
+/* 缩进层级：只到第 4 层，窄屏再深就换不下行了 */
+.pptx-lv-1 { margin-left: var(--space-12); }
+.pptx-lv-2 { margin-left: var(--space-24); }
+.pptx-lv-3 { margin-left: var(--space-32); }
+
+.pptx-page-empty {
+  margin: 0;
+  padding: var(--space-8) 0;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.pptx-page-more,
+.pptx-more {
+  margin: var(--space-8) 0 0;
+  padding: var(--space-6) var(--space-8);
+  font-size: var(--fs-hint);
+  line-height: 1.6;
+  color: var(--text-light);
+  background: var(--accent-light);
+  border-radius: var(--radius-xs);
+}
+
+.pptx-more {
+  margin: var(--space-4) 0 var(--space-12);
+}
+
+.pptx-empty {
+  margin: 0;
+  padding: var(--space-16) 0;
+  text-align: center;
+  font-size: var(--fs-caption);
+  line-height: 1.7;
+  color: var(--text-light);
+}
+
+/* 备注：默认折叠，点开才占地方 */
+.pptx-notes {
+  margin-top: var(--space-12);
+  padding-top: var(--space-8);
+  border-top: 1px dashed var(--border);
+}
+
+.pptx-notes-summary {
+  font-size: var(--fs-caption);
+  color: var(--text-light);
+  cursor: pointer;
+}
+
+.pptx-notes-body {
+  margin-top: var(--space-6);
+  font-size: var(--fs-caption);
+  line-height: 1.7;
+  color: var(--content-secondary-ink);
+}
+
+.pptx-notes-line {
+  margin: 0 0 var(--space-6);
+  overflow-wrap: anywhere;
+}
+
+.pptx-notes-line:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 380px) {
+  .pptx-page {
+    padding: var(--space-10);
+    border-radius: var(--radius-md);
+  }
+
+  .pptx-nav-btn {
+    min-width: 54px;
+  }
+}
