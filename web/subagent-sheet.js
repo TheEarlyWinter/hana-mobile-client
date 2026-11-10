@@ -285,17 +285,18 @@ function normalizeSteps(list) {
  * 造一个子代理详情 sheet。
  *
  * @param {object} [options]
- * @param {Document} options.document 注入的 document（必填，不读全局）
+ * @param {Document} [options.document] 注入的 document（必填，不读全局）
  * @param {Element} [options.mount] 挂载点，默认 doc.body
  * @param {(target: object) => Promise<Array>} [options.loadTranscript]
  *   取正文的注入点：sheet 自己不发请求；没接就当「没有可读的过程」
  * @param {(agentId: string) => (string|null)} [options.avatarUrlById] 头像地址来源
+ * @param {(text: string) => string} [options.renderText] markdown → HTML；只用于 say / ask 两类正文
  * @param {(reason: 'backdrop'|'close'|'drag'|'escape'|'api') => void} [options.onDismiss] 关闭回调
  * @param {() => void} [options.focusReturn] 关闭后把焦点交回触发元素的钩子（契约 2.5）；
  *   不接时 sheet 自己把焦点递回打开前的落点
  * @param {{setTimeout: Function, clearTimeout: Function}} [options.timers]
  *   骨架帧与关闭兜底用的定时器（测试注入假定时器）
- * @returns {{open: Function, close: Function, isOpen: Function, update: Function, destroy: Function}}
+ * @returns {{open: Function, close: Function, isOpen: Function, update: Function, setViewMode: Function, destroy: Function}}
  */
 export function createSubagentSheet({
   document: doc = null,
@@ -382,7 +383,10 @@ export function createSubagentSheet({
     closeTimer = null;
   }
 
-  /** 一帧：骨架换内容之前至少过一帧，避免「还没画就被替换」的闪跳。 */
+  /**
+   * 一帧：骨架换内容之前至少过一帧，避免「还没画就被替换」的闪跳。
+   * @returns {Promise<void>}
+   */
   function waitFrame() {
     return new Promise((resolve) => {
       const id = later(resolve, FRAME_MS);
@@ -866,7 +870,10 @@ export function createSubagentSheet({
   function focusLanding() {
     const active = doc.activeElement;
     if (!active) return null;
-    if (active === doc || active === doc.body || active === doc.documentElement) return null;
+    // 归档对比：真 DOM 里 activeElement 只会是 Element，但假 DOM 会把 document 自己放在这里，
+    // 而这条分支必须能识别它（否则 escape 会被错当成焦点在面板外）。
+    const anyActive = /** @type {any} */ (active);
+    if (anyActive === doc || active === doc.body || active === doc.documentElement) return null;
     return active;
   }
 
@@ -1161,7 +1168,10 @@ export function createSubagentSheet({
     return true;
   }
 
-  /** 关闭：幂等；reason 原样交回 onDismiss。动画结束后才摘节点。 */
+  /**
+   * 关闭：幂等；reason 原样交回 onDismiss。动画结束后才摘节点。
+   * @param {'api'|'backdrop'|'close'|'drag'|'escape'} [reason]
+   */
   function closeSheet(reason = 'api') {
     if (destroyed || !open) return false;
     open = false;

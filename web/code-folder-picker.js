@@ -116,10 +116,10 @@ let instanceSeq = 0;
 /**
  * 造一个目录选择器。
  *
- * @param {object} options
+ * @param {object} [options]
  * @param {Document} [options.doc] 默认 globalThis.document
  * @param {Element} [options.mount] 挂载容器，默认 doc.body
- * @param {() => Promise<object>} options.listRoots 工作区根来源（正式接线传 workspaceService.listRoots）
+ * @param {() => Promise<object>} [options.listRoots] 工作区根来源（正式接线传 workspaceService.listRoots）
  * @param {EventTarget} [options.keyTarget] Esc 的监听挂点，默认 doc（假 DOM 的 document 不转发
  *   key 字段，测试可以换成普通节点）
  * @returns {{open: Function, close: Function, isOpen: Function, getState: Function}}

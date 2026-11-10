@@ -373,7 +373,16 @@ export function createTable(doc, sheet, options = {}) {
 /**
  * 挂到容器上：多表时顶部一排标签，中间一张表，超限时表上方一条截断提示。
  * 全部节点由自己创建、自己摘掉；容器只被追加一个根节点。
- * @returns {{ destroy: () => void }}
+ *
+ * zip / container 没有默认值，不写下面这份 JSDoc 参数块，tsc 会把它们从形参类型里漏掉，
+ * 调用处传进来就成了多余属性；形状按 web/zip-reader.js 的 openZip 返回值写。
+ *
+ * @param {object} [options]
+ * @param {{ has(n: string): boolean, match(p: string): string[], text(n: string): Promise<string|null> }} [options.zip]
+ * @param {Element} [options.container]
+ * @param {number} [options.maxRows] 超过就截断并提示（默认 MAX_ROWS）
+ * @param {number} [options.maxCols] 同上（默认 MAX_COLS）
+ * @returns {Promise<{ destroy: () => void }>}
  */
 export async function mountXlsx({ zip, container, maxRows = MAX_ROWS, maxCols = MAX_COLS } = {}) {
   if (!container) throw new Error('mountXlsx 需要一个容器节点');

@@ -14,9 +14,13 @@ import { createHarness } from './support/app_harness.mjs';
 const h = createHarness();
 
 const pendings = new Map();
-h.setFetch((url) => new Promise((resolve) => {
-  pendings.set(String(url), resolve);
-}));
+let fetchCalls = 0;
+h.setFetch((url) => {
+  fetchCalls += 1;
+  return new Promise((resolve) => {
+    pendings.set(String(url), resolve);
+  });
+});
 
 const { openFilePreview, closeFilePreview, previewKind } = await import('../web/file-preview.js');
 
@@ -143,6 +147,20 @@ await t('工作区地址：给下载按钮，点击走统一的下载入口（�
   assert.ok(link, '工作区地址应给出下载按钮');
   link.dispatchEvent('click', { preventDefault() {} });
   assert.equal(globalThis.location.href, url, '下载必须靠导航（WebView 不认 <a download>）');
+  closeFilePreview();
+});
+
+await t('读地址为空：不发任何请求，只给一句人话（H6e 的隐藏请求在这里收口）', async () => {
+  const before = fetchCalls;
+  // 以前 img.src = null 会变成一次对 “null” 的请求（必然失败），现在提前拦住。
+  await openFilePreview({ file: { label: 'no-thumb.png', ext: 'png' }, readUrl: null });
+  await h.settle(2);
+
+  assert.equal(fetchCalls, before, '空地址不该发出任何请求');
+  // 不直接拿假 DOM 节点跟 null 比：assert 失败时会把整棵树展开成打印信息（夹具里会卡很久），
+  // 布尔断言既能断得准，失败也能马上看到。
+  assert.equal(Boolean(h.doc.body.querySelector('.file-preview-body img')), false, '更不能把 <img> 挂上去等它失败');
+  assert.ok(/拿不到可读地址/.test(bodyText()), `应给人话，实际：${bodyText()}`);
   closeFilePreview();
 });
 

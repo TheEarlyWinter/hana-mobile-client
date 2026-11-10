@@ -9,7 +9,8 @@
  * 2. 抓取行为（真起一个假上游 http server，注入 upstream 地址）：
  *    正常返回 data URL、content-type 原样写进 data URL、单张超限进 skipped、
  *    上游 403 / 非图片 → skipped 不冒泡、总预算截断（注入小预算 + 真实 1.5MB）、
- *    并发不超过 6、超时进 skipped、条件请求头不转发给上游、热缓存不再打上游。
+ *    并发不超过 6、超时进 skipped、条件请求头不转发给上游、热缓存不再打上游、
+ *    同一身份的并发相同请求只回源一次（在途合并；不同账号不并，失败不留在表里）。
  * 3. 真网关（spawn gateway/server.mjs，假上游兼作登录态 + 头像源）：
  *    未带 Cookie → 与 denyRead 一致的拒绝且不问上游；带 Cookie → 200 +
  *    cache-control/etag；同 etag → 304 无 body 且不再拉头像；400（bad_ids/bad_id）、
@@ -20,7 +21,9 @@
  *   - 去掉单张上限判断             → 「单张超限进 skipped」变红；
  *   - 去掉总预算判断               → 「总预算截断」变红；
  *   - 去掉点段（. / ..）拒绝        → 「点段 . / .. 额外拒绝」「ids 参数错误」变红；
- *   - 去掉并发上限（width 用 items.length）→ 「并发不超过 6」变红。
+ *   - 去掉并发上限（width 用 items.length）→ 「并发不超过 6」变红；
+ *   - 去掉在途合并（resolveAvatar 直接回源）→ 「并发相同请求只回源一次」变红；
+ *   - 在途条目不删（只在成功时摘）→ 「瞬时失败……下一次仍会回源」变红。
  */
 
 import assert from 'node:assert/strict';
@@ -42,13 +45,14 @@ import {
   USER_AVATAR_ID,
   createAvatarPack,
   etagForBody,
-  etagMatches,
   isAvatarPackPath,
   normalizeImageMime,
   parseAvatarIds,
   toDataUrl,
   upstreamPathForAvatarId,
 } from '../gateway/avatar-pack.mjs';
+// etagMatches 搬到了独立小模块：静态资源也要用它，不该反过来依赖头像模块。
+import { etagMatches } from '../gateway/etag.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -181,6 +185,8 @@ const PNG_OK = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 /** 总预算用例用的单张原始字节数（< 128KB 单张上限）。 */
 const BULK_IMAGE_BYTES = 120 * 1024;
 const CONCURRENCY_DELAY_MS = 20;
+/** in-flight 合并用例用的上游延迟：慢到足以让两个并发请求真的重叠，又远小于任何超时。 */
+const SLOW_DELAY_MS = 60;
 
 /** 单元用例的假上游：记录每个请求的路径与关键头，按 id 造不同结果。 */
 let unitUpstream;
@@ -228,6 +234,12 @@ function unitUpstreamHandler(req, res) {
   }
   if (id === 'hang') {
     // 永不回应：等客户端 5s（测试注入更短）超时把连接拆掉。
+    return;
+  }
+  if (id === 'slow') {
+    setTimeout(() => {
+      if (!res.writableEnded) sendImage(res, 'image/png', Buffer.from('png:slow'));
+    }, SLOW_DELAY_MS);
     return;
   }
   if (id.startsWith('c')) {
@@ -594,6 +606,63 @@ if (serversReady) {
     assert.equal(third.body, '');
     assert.equal(third.headers.etag, etag);
     assert.equal(unitSeen.length, before, '304 判定只走本地缓存');
+  });
+
+  await t('抓取：同一身份的并发相同请求只回源一次（in-flight 合并）', async () => {
+    const pack = unitPack();
+    const hitsFor = (id) => unitSeen.filter((seen) => seen.pathname === `/api/agents/${id}/avatar`).length;
+    const before = hitsFor('slow');
+
+    // 两个请求在同一个 tick 里发出：都会看到冷缓存，但只能有一个真的回源。
+    const [a, b] = await Promise.all([callPack(pack, 'slow'), callPack(pack, 'slow')]);
+    assert.equal(hitsFor('slow') - before, 1, '并发同一身份同一 id 只该回源一次');
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    assert.deepEqual(a.json, b.json, '共享同一次回源就必须拼出同样的 body');
+    assert.equal(a.headers.etag, b.headers.etag, '同 body 同 etag');
+
+    // 合并出来的结果必须落进缓存，否则下一次请求又把上游拉一遍。
+    const third = await callPack(pack, 'slow');
+    assert.equal(third.status, 200);
+    assert.deepEqual(third.json, a.json);
+    assert.equal(hitsFor('slow') - before, 1, '合并的结果必须进缓存');
+  });
+
+  await t('抓取：合并键带 Cookie 身份——不同账号并发仍各回源一次', async () => {
+    const pack = unitPack();
+    const pathname = '/api/agents/slow/avatar';
+    const before = unitSeen.filter((seen) => seen.pathname === pathname).length;
+    const [alice, bob] = await Promise.all([
+      callPack(pack, 'slow', { cookie: 'sid=alice' }),
+      callPack(pack, 'slow', { cookie: 'sid=bob' }),
+    ]);
+    assert.equal(alice.status, 200);
+    assert.equal(bob.status, 200);
+    assert.equal(
+      unitSeen.filter((seen) => seen.pathname === pathname).length - before,
+      2,
+      '两个身份不能共享在途结果（同名 id 也可能是不同账号看到的不同图）',
+    );
+    assert.equal(pack.cacheSize(), 2, '两个身份各存一份');
+  });
+
+  await t('抓取：瞬时失败不留在在途表里，下一次仍会回源', async () => {
+    // 超时不进缓存（CACHEABLE_FAILURE_REASONS 不含它）：若在途表也没摘干净，
+    // 后来者会拿到那次打嗝的旧结果，而不是重新试一次。
+    const pack = unitPack({ timeoutMs: 120 });
+    const pathname = '/api/agents/hang/avatar';
+    const before = unitSeen.filter((seen) => seen.pathname === pathname).length;
+
+    const first = await callPack(pack, 'hang');
+    assert.deepEqual(first.json.skipped, ['hang']);
+    const second = await callPack(pack, 'hang');
+    assert.deepEqual(second.json.skipped, ['hang']);
+    assert.equal(
+      unitSeen.filter((seen) => seen.pathname === pathname).length - before,
+      2,
+      '两次请求各自回源一次，说明失败没被在途表/缓存留下来',
+    );
+    assert.equal(pack.cacheSize(), 0, '超时是瞬时故障，不该占缓存条目');
   });
 
   await t('抓取：缓存按 Cookie 身份隔离，不同账号不串', async () => {

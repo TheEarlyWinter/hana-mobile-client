@@ -211,6 +211,78 @@ await t('装配层无资料场景：S.sessions 与搜索均无 agentId 时保留
   assert.equal(openedSession.agentId, null, '缺少元数据时必须保持 null，保留现有明确报错，不得猜当前 Agent');
 });
 
+await t('features/search.js onSelect: 把 matchKind 与 snippet 一并交给定位（H9 第 1 条）', async () => {
+  let opened = null;
+  const doc = makeDoc();
+
+  const feature = createSearchFeature({
+    getElement: () => null,
+    api: async () => ({
+      results: [{
+        path: 'C:/sessions/hit.jsonl',
+        sessionId: 'sess-hit',
+        title: '命中在正文里的会话',
+        matchKind: 'content',
+        snippet: '...上周讨论过排序算法的稳定性问题...',
+        messageCount: 42,
+      }],
+    }),
+    getNamespace: () => 'home',
+    openSession: (s) => { opened = s; },
+    document: doc,
+  });
+
+  feature.open();
+  const inputEl = doc.allNodes.find((n) => n.tagName === 'INPUT');
+  inputEl.value = '稳定性';
+  inputEl.dispatchEvent({ type: 'input' });
+  await new Promise((r) => setTimeout(r, 220));
+
+  const li = doc.allNodes.find((n) => n.tagName === 'LI');
+  assert.ok(li, '应渲染出搜索结果列表项 li');
+  li.dispatchEvent({ type: 'click' });
+
+  assert.ok(opened, 'openSession 必须被调用');
+  assert.equal(opened.locateQuery, '稳定性', '原词照旧传');
+  assert.equal(opened.locateSnippet, '...上周讨论过排序算法的稳定性问题...', 'snippet 要交给定位做锤点');
+  assert.equal(opened.locateMatchKind, 'content', 'matchKind 要原样传下去');
+  assert.equal(opened.messageCount, 42, 'messageCount 要能走到装配层（翻页预算要用）');
+});
+
+await t('features/search.js onSelect: title 命中没有 snippet 时 locateSnippet 给空串、matchKind 标 title', async () => {
+  let opened = null;
+  const doc = makeDoc();
+
+  const feature = createSearchFeature({
+    getElement: () => null,
+    api: async () => ({
+      results: [{
+        path: 'C:/sessions/title.jsonl',
+        sessionId: 'sess-title',
+        title: '只在标题里出现的词',
+        matchKind: 'title',
+      }],
+    }),
+    getNamespace: () => 'home',
+    openSession: (s) => { opened = s; },
+    document: doc,
+  });
+
+  feature.open();
+  const inputEl = doc.allNodes.find((n) => n.tagName === 'INPUT');
+  inputEl.value = '标题里的词';
+  inputEl.dispatchEvent({ type: 'input' });
+  await new Promise((r) => setTimeout(r, 220));
+
+  const li = doc.allNodes.find((n) => n.tagName === 'LI');
+  assert.ok(li, '应渲染出搜索结果列表项 li');
+  li.dispatchEvent({ type: 'click' });
+
+  assert.ok(opened);
+  assert.equal(opened.locateMatchKind, 'title');
+  assert.equal(opened.locateSnippet, '', '没有 snippet 时不能传 undefined 给定位模块');
+});
+
 if (bad > 0) {
   console.log(`\n${bad} TESTS FAILED`);
   process.exit(1);

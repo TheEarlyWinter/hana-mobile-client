@@ -2,10 +2,12 @@
  * 网关结构化日志：JSON Lines、按天滚、按大小切段、字段白名单 + 脱敏。
  *
  * 设计约束（出问题时 agent 要靠它自己查清发生了什么）：
- *   - 每条记录一行 JSON，字段固定；未知字段一律丢弃（顺带保证不把请求/响应正文写进来）；
+ *   - 每条记录一行 JSON，字段固定；未知字段一律丢弃（顺带保证不把请求/响应正文写进来，
+ *     WS 帧正文只有显式开了 HANA_GW_LOG_WS_BODY 才会走 `body` 字段）；
  *   - 文件名 `gateway-YYYY-MM-DD.jsonl`（本地时区），单文件超过 maxBytes（默认 5MB）就
  *     顺延到 `gateway-YYYY-MM-DD.1.jsonl`、`.2` …：序号只增不减，所以「谁更旧」看文件名
- *     就能判，不依赖 mtime；
+ *     就能判，不依赖 mtime；前缀可换（`prefix`），WS 帧日志用 `ws-frames` 单独成流，
+ *     容量/保留份数参数共用一套；
  *   - 目录里只保留最近 keepFiles 份（默认 5），更旧的删掉 —— 单文件上限 × 保留份数就是
  *     这块日志的硬上限（默认 25MB），跑多久都不会把磁盘写满；
  *   - 清理只碰自己命名规则的文件，绝不碰目录里的其它东西；正在写的那一份永远不删；
@@ -25,7 +27,7 @@ import path from 'node:path';
 
 const LEVELS = new Set(['info', 'warn', 'error']);
 const KINDS = new Set(['http', 'ws', 'lifecycle']);
-const WS_EVENTS = new Set(['open', 'close', 'error']);
+const WS_EVENTS = new Set(['open', 'close', 'error', 'frame']);
 const LIFECYCLE_EVENTS = new Set(['start', 'stop', 'config']);
 
 /** 单文件上限与保留份数：两者相乘就是日志目录的硬上限（默认 5 × 5MB = 25MB）。 */
@@ -34,10 +36,18 @@ const DEFAULT_KEEP_FILES = 5;
 /** 额外的按天保留期：闲置时把很久以前的日志清掉，正常写入时份数上限先生效。 */
 const DEFAULT_RETENTION_DAYS = 14;
 const TEXT_MAX = 300;
+/**
+ * 帧正文上限（字符）：一帧可能带内联图片（base64 几十 MB），整段写进日志既没用也写不动。
+ * 导出给 websocket-proxy 用 —— 它在解析那一侧先截断，免得脱敏正则去扫几十 MB 的字符串。
+ */
+export const WS_FRAME_BODY_MAX = 2048;
 const REDACTED = '[redacted]';
 
-/** 只认自己写出来的文件名；`prune()` 也只按这个规则删。 */
-const LOG_FILE_RE = /^gateway-(\d{4})-(\d{2})-(\d{2})(?:\.(\d+))?\.jsonl$/;
+/** 只认自己写出来的文件名（`<prefix>-YYYY-MM-DD[.n].jsonl`）；`prune()` 也只按这个规则删。 */
+function makeLogFileRe(prefix) {
+  const escaped = String(prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}-(\\d{4})-(\\d{2})-(\\d{2})(?:\\.(\\d+))?\\.jsonl$`);
+}
 
 /**
  * 脱敏规则按顺序执行；替换完再跑一遍，覆盖 `cookie=token=...` 这类嵌套写法。
@@ -122,15 +132,16 @@ function oneLineText(value) {
     .trim();
 }
 
-function segmentName(dateKey, index) {
+function segmentName(prefix, dateKey, index) {
   return index === 0
-    ? `gateway-${dateKey}.jsonl`
-    : `gateway-${dateKey}.${index}.jsonl`;
+    ? `${prefix}-${dateKey}.jsonl`
+    : `${prefix}-${dateKey}.${index}.jsonl`;
 }
 
 /**
  * @param {{
  *   dir?: string,
+ *   prefix?: string,
  *   now?: () => Date,
  *   retentionDays?: number,
  *   maxBytes?: number,
@@ -141,6 +152,13 @@ function segmentName(dateKey, index) {
 export function createLogger(options = {}) {
   const fs = options.fs || defaultFs;
   const dir = path.resolve(String(options.dir || path.join('gateway', 'logs')));
+  /**
+   * 文件名前缀，默认 `gateway`。WS 帧日志用 `ws-frames` 单独一条流：帧量远大于请求量，
+   * 混在一起会把请求记录挤出保留窗口。两边的容量/保留份数参数是同一套。
+   */
+  const prefix =
+    typeof options.prefix === 'string' && options.prefix.trim() ? options.prefix.trim() : 'gateway';
+  const fileRe = makeLogFileRe(prefix);
   const now = typeof options.now === 'function' ? options.now : () => new Date();
   const retentionDays =
     Number.isFinite(options.retentionDays) && options.retentionDays >= 0
@@ -210,7 +228,7 @@ export function createLogger(options = {}) {
     }
     const files = [];
     for (const name of names) {
-      const match = LOG_FILE_RE.exec(String(name));
+      const match = fileRe.exec(String(name));
       if (!match) continue;
       files.push({
         name: String(name),
@@ -244,7 +262,7 @@ export function createLogger(options = {}) {
       index = size === 0 || size + bytes <= maxBytes ? last.index : last.index + 1;
     }
 
-    const state = { index, file: path.join(dir, segmentName(dateKey, index)) };
+    const state = { index, file: path.join(dir, segmentName(prefix, dateKey, index)) };
     active.set(dateKey, state);
     needPrune = true;
     return state;
@@ -261,7 +279,7 @@ export function createLogger(options = {}) {
       const used = (await sizeOf(state.file)) + (reserved.get(state.file) || 0);
       if (used === 0 || used + bytes <= maxBytes) return state.file;
       state.index += 1;
-      state.file = path.join(dir, segmentName(dateKey, state.index));
+      state.file = path.join(dir, segmentName(prefix, dateKey, state.index));
       needPrune = true;
     }
   }
@@ -363,6 +381,15 @@ export function createLogger(options = {}) {
       if (WS_EVENTS.has(entry.event)) record.event = entry.event;
       putNumber(record, 'ms', entry.ms);
       putNumber(record, 'code', entry.code);
+      putText(record, 'path', entry.path);
+      // 帧记录（event: 'frame'）：只留方向/帧类型/字节数/会话前缀，正文默认不落盘。
+      putText(record, 'dir', entry.dir);
+      putText(record, 'op', entry.op);
+      putNumber(record, 'bytes', entry.bytes);
+      putNumber(record, 'cont', entry.cont);
+      putText(record, 'msg', entry.msg);
+      putText(record, 'session', entry.session);
+      putText(record, 'body', entry.body, { oneLine: true, max: WS_FRAME_BODY_MAX });
     } else {
       if (LIFECYCLE_EVENTS.has(entry.event)) record.event = entry.event;
       // port/pid 用来分辨某行是哪个网关实例写的（真网关与测试网关日志一旦混在一起，没有这两个字段很难认）。
@@ -394,7 +421,7 @@ export function createLogger(options = {}) {
     await enqueuePending();
   }
 
-  /** 删除超过 retentionDays 的日志；只动 gateway-YYYY-MM-DD[.n].jsonl。 */
+  /** 删除超过 retentionDays 的日志；只动本前缀的 `<prefix>-YYYY-MM-DD[.n].jsonl`。 */
   async function pruneByAge() {
     let removed = 0;
     const files = await readLogFiles();

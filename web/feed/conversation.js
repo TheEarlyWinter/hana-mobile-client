@@ -32,14 +32,14 @@ function readCreatedSession(value, wantedAgentId) {
 }
 
 /**
- * @param {object} options
- * @param {(path:string, init?:object)=>Promise<any>} options.api
- * @param {ReturnType<import('./client.js').createFeedClient>} options.client
- * @param {()=>object|null} options.getIdentity
- * @param {()=>number} options.getNavigationEpoch
- * @param {()=>object|null} options.getSession
- * @param {(session:object)=>Promise<void>} options.openSession
- * @param {(input:{text:string,feed:object,isCurrent:()=>boolean})=>Promise<object>} options.sendPrepared
+ * @param {object} [options]
+ * @param {(path:string, init?:object)=>Promise<any>} [options.api]
+ * @param {ReturnType<typeof import('./client.js').createFeedClient>} [options.client]
+ * @param {()=>object|null} [options.getIdentity]
+ * @param {()=>number} [options.getNavigationEpoch]
+ * @param {()=>object|null} [options.getSession]
+ * @param {(session:object)=>Promise<void>} [options.openSession]
+ * @param {(input:{text:string,feed:object,isCurrent:()=>boolean})=>Promise<object>} [options.sendPrepared]
  * @param {()=>boolean} [options.isActive]
  */
 export function createFeedConversation({

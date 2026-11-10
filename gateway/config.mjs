@@ -12,7 +12,8 @@
  *   HANA_GW_ALLOWED_ORIGINS     逗号分隔的显式允许 Origin（每一项都必须是单个 Origin）
  *   HANA_GW_EXTERNAL_HTTPS      设 1 表示公网 TLS 在网关外终止（隧道/反代），Set-Cookie 补 Secure
  *   HANA_GW_TLS_CERT_FILE / HANA_GW_TLS_KEY_FILE  同时提供才启用 HTTPS
- *   HANA_GW_LOG_WS      设 1 则把 WebSocket 文本帧写进 gateway/ws-frames.log
+ *   HANA_GW_LOG_WS      设 1 则把 WebSocket 帧写进结构化日志的 ws-frames 流（不含正文）
+ *   HANA_GW_LOG_WS_BODY 配合上一个用：设 1 则帧正文也写（含用户输入，仅排障）
  *   HANA_GATEWAY_LOG    设 off 则整体关闭结构化日志（gateway/logs/*.jsonl）
  *   HANA_GATEWAY_LOG_DIR  结构化日志目录，默认 <仓库>/gateway/logs
  *   HANA_GATEWAY_LOG_MAX_BYTES  单文件上限，默认 5242880（5MB），超过就滚动到下一段
@@ -39,8 +40,9 @@ export function startupError(message) {
 }
 
 export const WEB_ROOT = path.resolve(__dirname, '..', 'web');
-export const WS_LOG = path.join(__dirname, 'ws-frames.log');
+/** WS 帧日志开关：默认只记方向/类型/字节数/会话前缀，正文要另开 HANA_GW_LOG_WS_BODY。 */
 export const LOG_WS = process.env.HANA_GW_LOG_WS === '1';
+export const LOG_WS_BODY = LOG_WS && process.env.HANA_GW_LOG_WS_BODY === '1';
 
 /** 结构化日志：默认落 gateway/logs，`HANA_GATEWAY_LOG=off` 整体关闭。 */
 export const LOG_ENABLED = String(process.env.HANA_GATEWAY_LOG || '').trim().toLowerCase() !== 'off';

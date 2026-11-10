@@ -213,8 +213,8 @@ function normalizeCapability(raw) {
 
 /**
  * 创建卡片通信宿主桥
- * @param {object} options
- * @param {Function} options.api HTTP 请求客户端
+ * @param {object} [options]
+ * @param {Function} [options.api] HTTP 请求客户端
  * @param {Window} [options.window] 监听 message 的 Window 实例
  * @param {Function} [options.confirmAction] 动作确认弹窗回调 async ({ title, message, details }) => boolean
  * @param {Function} [options.getActiveContext] 获取当前活跃前台会话 () => ({ sessionId, sessionPath?, isVisible })

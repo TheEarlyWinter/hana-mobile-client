@@ -155,7 +155,7 @@ async function startLiveTurn(socket, { streamId, text }) {
   });
   await h.settle(5);
   assert.equal(hana.S.busy, true, '夹具：真实 status/text_delta 应进入生成态');
-  assert.ok(hana.S.turn, '夹具：真实 text_delta 应开出一轮');
+  assert.ok(R.turn, '夹具：真实 text_delta 应开出一轮');
 }
 
 /**
@@ -207,8 +207,11 @@ async function t(name, fn) {
 }
 
 let hana = null;
+let R = null;
 try {
   hana = await h.loadApp();
+  /* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+  R = hana.rendererState;
   const S = hana.S;
   await h.waitFor(() => S.currentAgent, 'boot 完成');
 
@@ -285,7 +288,7 @@ try {
     });
 
     await h.waitFor(() => S.busy === false, 'runtime=false 必须收掉 busy', 1500);
-    assert.ok(!S.turn, '权威收尾后不能留着活动轮');
+    assert.ok(!R.turn, '权威收尾后不能留着活动轮');
     await h.waitFor(
       () => historyCount() === beforeGet + 1,
       '收尾后应发一次历史补拉（无 state.turn 也要补）',
@@ -306,7 +309,7 @@ try {
 
   await t('等待首字（busy 无 turn）时 status:false：清 busy、清占位、补历史', async () => {
     const socket = lastSocket();
-    assert.ok(!S.turn, '夹具：上一条历史回放后没有活动轮');
+    assert.ok(!R.turn, '夹具：上一条历史回放后没有活动轮');
 
     // 真实回显一笔用户消息：占位块挂着，模型还没吐字。
     socket.push({
@@ -326,7 +329,7 @@ try {
     pushStatus(socket, true, 'stream-waiting-first-token');
     await h.settle(4);
     assert.equal(S.busy, true, '夹具：status:true 应进入生成态');
-    assert.ok(!S.turn, 'status:true 本身不能凭空建轮');
+    assert.ok(!R.turn, 'status:true 本身不能凭空建轮');
 
     pushStatus(socket, false, 'stream-waiting-first-token');
     await h.settle(4);
@@ -373,7 +376,7 @@ try {
     await h.delay(500);
     await h.settle(6);
     assert.equal(S.busy, true, '运行态还在生成时不能清 busy');
-    assert.ok(S.turn, '还在生成的活动轮不能被收掉');
+    assert.ok(R.turn, '还在生成的活动轮不能被收掉');
     assert.ok(transcriptText().includes('PARTIAL_STILL_RUNNING'), '正在生成的内容不能被历史替换');
     assert.ok(!transcriptText().includes('COMPLETE_MUST_NOT_REPLACE'), '不能拿缓存快照当完成信号');
     assert.equal(historyCount(), beforeGet, '还在生成时不该补拉历史');
@@ -398,7 +401,7 @@ try {
     await h.delay(450);
     await h.settle(5);
     assert.equal(S.busy, true, '缺字段不能推断完成');
-    assert.ok(S.turn, '缺字段不能收掉活动轮');
+    assert.ok(R.turn, '缺字段不能收掉活动轮');
     assert.equal(historyCount(), beforeGet, '缺字段不能补拉历史');
 
     socket.push({
@@ -414,7 +417,7 @@ try {
     await h.delay(450);
     await h.settle(5);
     assert.equal(S.busy, true, '非布尔字段同样不能推断完成');
-    assert.ok(S.turn);
+    assert.ok(R.turn);
     assert.equal(historyCount(), beforeGet, '非布尔字段不能补拉历史');
   });
 
@@ -441,7 +444,7 @@ try {
     await h.delay(450);
     await h.settle(5);
     assert.equal(S.busy, true, '别的会话的 idle 不能收掉本会话的生成态');
-    assert.ok(S.turn);
+    assert.ok(R.turn);
     assert.ok(!transcriptText().includes('FOREIGN_TEXT'), '别的会话的正文不能串进来');
     assert.equal(historyCount(), beforeGet, '别的会话的恢复帧不能触发本会话补拉');
 
@@ -465,7 +468,7 @@ try {
     });
     await h.settle(6);
     assert.equal(S.busy, true, '外层是本会话时，内层 foreign 的 idle 也不能收本会话');
-    assert.ok(S.turn);
+    assert.ok(R.turn);
     assert.ok(transcriptText().includes('PARTIAL_STILL_RUNNING'), '本会话的部分回复必须保留');
     assert.equal(historyCount(), beforeGet, '内层 foreign 不能触发本会话补拉');
     assert.equal(notifyLog.length, innerNotifyBefore, '内层 foreign 不能触发结束通知');
@@ -489,7 +492,7 @@ try {
     pushStatus(socket, true, 'stream-duplicate-idle');
     await h.settle(4);
     assert.equal(S.busy, true, '夹具：status:true 应进入生成态');
-    assert.ok(!S.turn, '夹具：等待首字时没有活动轮');
+    assert.ok(!R.turn, '夹具：等待首字时没有活动轮');
 
     const beforeGet = historyCount();
     for (let i = 0; i < 2; i += 1) {
@@ -582,7 +585,7 @@ try {
   await t('C1: 初始 idle + runtime=true：恢复 busy，focus 补拉不得替换内容', async () => {
     await ensureMainSessionReady();
     assert.equal(S.busy, false, '夹具：应从 idle 开始');
-    assert.ok(!S.turn, '夹具：idle 时没有活动轮');
+    assert.ok(!R.turn, '夹具：idle 时没有活动轮');
 
     historyFixture = historyWith('C1_INITIAL_HISTORY');
     await hana.loadHistory();
@@ -603,7 +606,7 @@ try {
     });
     await h.settle(6);
     assert.equal(S.busy, true, 'runtime=true 必须把初始 idle 的客户端恢复成生成态');
-    assert.ok(!S.turn, '恢复 busy 不能凭空造一个活动轮');
+    assert.ok(!R.turn, '恢复 busy 不能凭空造一个活动轮');
 
     // focus 的 400ms 空闲补拉必须被 busy 门禁挡住，不能整页替换正在生成的内容。
     historyFixture = historyWith('C1_MUST_NOT_REPLACE');
@@ -647,7 +650,7 @@ try {
     await hana.loadHistory();
     await h.waitFor(() => transcriptText().includes('C2_LIVE_HISTORY'), '夹具：基线历史上屏', 2000);
     await startLiveTurn(socket, { streamId: 'c2-live-stream', text: 'C2_LIVE_PARTIAL' });
-    const turnBefore = S.turn;
+    const turnBefore = R.turn;
     const beforeGet = historyCount();
     const beforeNotify = notifyLog.length;
 
@@ -678,7 +681,7 @@ try {
       });
       await h.settle(8);
       assert.equal(S.busy, true, `${term.type} 回放不能清掉生成态`);
-      assert.ok(S.turn === turnBefore, `${term.type} 回放不能收掉活动轮`);
+      assert.ok(R.turn === turnBefore, `${term.type} 回放不能收掉活动轮`);
       assert.ok(transcriptText().includes('C2_LIVE_PARTIAL'), `${term.type} 回放不能替换正文`);
       assert.equal(historyCount(), beforeGet, `${term.type} 回放不能触发历史补拉`);
       assert.equal(notifyLog.length, beforeNotify, `${term.type} 回放不能触发结束通知`);
@@ -701,7 +704,7 @@ try {
     await h.settle(8);
     assert.ok(transcriptText().includes('C2_REPLAYED_CONTENT'), '回放正文必须照常上屏');
     assert.equal(S.busy, true, '回放里的段结束/旧终态都不能结束整轮');
-    assert.ok(S.turn === turnBefore, '活动轮仍是同一轮');
+    assert.ok(R.turn === turnBefore, '活动轮仍是同一轮');
     assert.equal(historyCount(), beforeGet, '回放内容不能触发历史补拉');
     assert.equal(notifyLog.length, beforeNotify, '回放内容不能触发结束通知');
     assert.equal(hana.streamState.snapshot().lastSeq, 8, '回放游标继续推进');
@@ -725,7 +728,7 @@ try {
   await t('I1: 无 turn 的 runtime idle 清掉旧段元数据，新轮不被 skipped-aborted 压掉', async () => {
     await ensureMainSessionReady();
     const socket = lastSocket();
-    assert.ok(!S.turn, '夹具：应从无活动轮开始');
+    assert.ok(!R.turn, '夹具：应从无活动轮开始');
     assert.equal(S.busy, false, '夹具：应从 idle 开始');
 
     const beforeIdleGet = historyCount();
@@ -757,7 +760,7 @@ try {
     const verdict = notifyLog.at(-1).split(' → ').at(-1);
     assert.equal(verdict, 'skipped-foreground', `旧段 aborted 不得压掉新轮通知，实际 ${verdict}`);
     assert.equal(S.busy, false, '新轮结束后应回到 idle');
-    assert.ok(!S.turn, '新轮结束后不应留有活动轮');
+    assert.ok(!R.turn, '新轮结束后不应留有活动轮');
   });
 
   /* ------------------------------------------------------------------ */

@@ -795,6 +795,8 @@ await import('../web/app.js');
 await waitFor(() => globalThis.__hana, 'window.__hana 就绪');
 const hana = globalThis.__hana;
 const S = hana.S;
+/* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+const R = hana?.rendererState || globalThis.__hana.rendererState;
 await waitFor(() => S.currentAgent, 'boot 完成（S.currentAgent 就绪）');
 
 let bad = 0;
@@ -1053,8 +1055,8 @@ await t('生成中：允许加载更早，流式轮的身份 / 正文 / 游标�
   liveBody.className = 'turn-body';
   liveBody.textContent = 'LIVE-STREAM-TEXT';
   liveTurn.appendChild(liveBody);
-  S.turn = liveTurn;
-  const turnBefore = S.turn;
+  R.turn = liveTurn;
+  const turnBefore = R.turn;
 
   // 1) 生成中点「加载更早」：请求照发，更早页照样回放（旧契约是直接拦住）
   S.busy = true;
@@ -1067,10 +1069,10 @@ await t('生成中：允许加载更早，流式轮的身份 / 正文 / 游标�
   await waitFor(() => transcriptText().includes('EARLY-A-1'), '更早页应正常回放上屏');
 
   assert.deepEqual(hana.streamState.snapshot(), cursor, '回放更早页不能动流式 cursor');
-  assert.equal(S.turn, turnBefore, '回放更早页不能把正在生成的那一轮顶掉');
+  assert.equal(R.turn, turnBefore, '回放更早页不能把正在生成的那一轮顶掉');
   assert.equal(liveBody.textContent, 'LIVE-STREAM-TEXT', '流式轮正文不能被动');
   S.busy = false;
-  S.turn = null;
+  R.turn = null;
 });
 
 await t('请求在飞时转 busy：更早页仍可提交，但不能动流式轮', async () => {
@@ -1083,8 +1085,8 @@ await t('请求在飞时转 busy：更早页仍可提交，但不能动流式轮
   liveBody.className = 'turn-body';
   liveBody.textContent = 'LIVE-STREAM-TEXT';
   liveTurn.appendChild(liveBody);
-  S.turn = liveTurn;
-  const turnBefore = S.turn;
+  R.turn = liveTurn;
+  const turnBefore = R.turn;
 
   // 先把请求挂起来，再在它飞行的路上转成生成态：提交复核必须放行 older，同时不碰实时轮
   state.holdOlder = true;
@@ -1103,10 +1105,10 @@ await t('请求在飞时转 busy：更早页仍可提交，但不能动流式轮
   await settle(8);
 
   assert.deepEqual(hana.streamState.snapshot(), cursor, '迟到响应不能动流式 cursor');
-  assert.equal(S.turn, turnBefore, '迟到响应不能动流式 turn');
+  assert.equal(R.turn, turnBefore, '迟到响应不能动流式 turn');
   assert.equal(liveBody.textContent, 'LIVE-STREAM-TEXT', '迟到响应不能动流式 turn 正文');
   S.busy = false;
-  S.turn = null;
+  R.turn = null;
 });
 
 await t('原有 Chat / Code 切换不回退：换目录筛选不动活动会话和已加载历史', async () => {
@@ -1223,8 +1225,8 @@ await t('同页连续 assistant 仍合成一轮，且页尾轮不回写 state.tu
     1,
     '合并后每条内容只能出现一次（不能拆成两轮也不能重复）',
   );
-  assert.equal(S.turn, null, '历史页结束后 state.turn 必须是空的：历史轮不能留给实时路由');
-  assert.equal(S.turnBody, null, 'state.turnBody 也不能残留历史轮');
+  assert.equal(R.turn, null, '历史页结束后 state.turn 必须是空的：历史轮不能留给实时路由');
+  assert.equal(R.turnBody, null, 'state.turnBody 也不能残留历史轮');
 });
 
 await t('页尾 assistant 后的实时 delta 另起一轮，不改历史轮正文与尾注', async () => {
@@ -1240,7 +1242,7 @@ await t('页尾 assistant 后的实时 delta 另起一轮，不改历史轮正�
   await settle(4);
 
   const liveTurn = turns()[turns().length - 1];
-  assert.ok(S.turn, '实时 delta 应开出一轮实时轮');
+  assert.ok(R.turn, '实时 delta 应开出一轮实时轮');
   assert.notEqual(liveTurn, historyTurn, '实时 delta 不能续进历史轮');
   assert.ok(subtreeText(liveTurn).includes('H-LIVE-DELTA'), `新轮应带实时正文，实际：${subtreeText(liveTurn)}`);
   assert.equal(subtreeText(historyTurn), historyText, '历史轮正文不能被实时 delta 改动');
@@ -1298,7 +1300,7 @@ await t('file 锚在 user 后面：首次页挂到这条 user，而不是后面�
   assert.ok(host, '文件卡应挂在某个消息轮里');
   assert.ok(splitClasses(host.className).includes('user'), `应挂在本页的 user 轮上，实际 ${host.className}`);
   assert.ok(subtreeText(host).includes('I-LATEST-U-3'), '应挂在 file 锚点前面那条 user 上');
-  assert.equal(S.turn, null, '渲染完仍不能把历史轮留在 state.turn');
+  assert.equal(R.turn, null, '渲染完仍不能把历史轮留在 state.turn');
 });
 
 await t('file 锚在更早页 user 后面：prepend 不能挂到更新的一页上', async () => {

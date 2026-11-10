@@ -280,6 +280,91 @@ await testAsync('onStatusChange 抛异常也不影响连接建立与原有回调
   client.drop();
 });
 
+await testAsync('waitForReady：取消条件一旦成立就交回 false，不等超时', async () => {
+  const { client, state } = makeClient();
+  client.connect();                         // 保持 CONNECTING，永远等不到就绪
+  let cancelled = false;
+  const started = Date.now();
+  const waiting = client.waitForReady(4000, () => cancelled);
+  setTimeout(() => { cancelled = true; }, 10);
+
+  assert.equal(await waiting, false, '取消要返回 false（与超时同义），不能 reject');
+  assert.ok(Date.now() - started < 1000, '取消必须提前结束等待，不能等满 4 秒');
+  assert.equal(state.wsReady, false, '取消只结束等待，不碰连接状态（发不发帧由调用方决定）');
+  client.drop();
+});
+
+await testAsync('waitForReady：没有取消条件时照旧等 open，开了就返回 true', async () => {
+  const { client } = makeClient();
+  client.connect();
+  const waiting = client.waitForReady(4000);
+  last().open();
+  assert.equal(await waiting, true);
+  client.drop();
+});
+
+/* I1-3：没有 WebSocket 能力不能把异常抛给 openSession / 重连定时器。 */
+
+function makeCapabilityClient({ getWebSocket, onUnavailable }) {
+  const events = [];
+  const ready = [];
+  const state = { ws: null, wsReady: false, reconnectDelay: 800, pendingAbort: null, session: null };
+  const client = createWebsocketClient({
+    state,
+    getSession: () => null,
+    getWebSocket,
+    getLocation: () => ({ protocol: 'http:', host: 'localhost:24000' }),
+    onStatusChange: (status) => events.push(`status:${status}`),
+    onReadyChange: (value) => ready.push(value),
+    onUnavailable,
+  });
+  return { client, state, events, ready };
+}
+
+test('没有 WebSocket 能力：connect 不抛、不建连接，报一次 unsupported', () => {
+  const unavailable = [];
+  const before = FakeSocket.instances.length;
+  const { client, state, events } = makeCapabilityClient({
+    getWebSocket: () => undefined,
+    onUnavailable: (reason, error) => unavailable.push({ reason, error }),
+  });
+
+  assert.doesNotThrow(() => client.connect(), '缺能力时抛出去就是白屏级的未捕获错误');
+  assert.equal(FakeSocket.instances.length, before, '没能力就不该产生半条连接');
+  assert.deepEqual(unavailable.map((item) => item.reason), ['unsupported']);
+  assert.equal(state.ws, null);
+  assert.equal(state.wsReady, false);
+  assert.deepEqual(events, ['status:closed'], '要收掉「正在重连」提示；重连没用，不能报 reconnecting');
+  client.drop();
+});
+
+test('WebSocket 构造失败：转成 constructor 原因，旧连接的「已就绪」要撤回', () => {
+  let impl = FakeSocket;
+  const unavailable = [];
+  const { client, state, events, ready } = makeCapabilityClient({
+    getWebSocket: () => impl,
+    onUnavailable: (reason, error) => unavailable.push({ reason, error }),
+  });
+
+  client.connect();
+  last().open();
+  events.length = 0;
+  ready.length = 0;
+
+  impl = class ExplodingSocket {
+    constructor() { throw new Error('blocked by policy'); }
+  };
+  assert.doesNotThrow(() => client.connect(), '构造炸了也不能抛给调用方');
+  assert.deepEqual(ready, [false], '旧连接已关，就绪位必须撤回');
+  assert.equal(unavailable.length, 1);
+  assert.equal(unavailable[0].reason, 'constructor');
+  assert.match(String(unavailable[0].error && unavailable[0].error.message), /blocked by policy/);
+  assert.equal(state.ws, null, '构造失败不能留下半个连接');
+  assert.equal(state.wsReady, false);
+  assert.deepEqual(events, ['status:closed']);
+  client.drop();
+});
+
 if (failed > 0) {
   console.log(`\n${failed} TESTS FAILED`);
   process.exit(1);

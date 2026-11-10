@@ -18,6 +18,8 @@ const h = createHarness();
 const state = {
   rootsFail: false,
   rootsCalls: 0,
+  // 资源地址请求计数：文件卡再也不能自己按 fileId 去取缩略图（缺陷 H6e）
+  resourceCalls: 0,
   roots: [{ mountId: 'mount-1', label: 'workspace', nativeRootPath: 'C:/work/workspace' }],
   // 需要观察「请求在途时 reset / 切身份」的用例，把下一次取根挂在这里。
   rootsQueue: [],
@@ -47,6 +49,7 @@ h.setFetch(async (url) => {
   }
   // 资源读地址：fetch 读，壳不拦；预览能不能打开就看这条能不能回。
   if (path.startsWith('/api/resources/')) {
+    state.resourceCalls += 1;
     return {
       ok: true,
       status: 200,
@@ -68,6 +71,8 @@ h.setFetch(async (url) => {
 
 const hana = await h.loadApp();
 const S = hana.S;
+/* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+const R = hana?.rendererState || globalThis.__hana.rendererState;
 await h.waitFor(() => S.currentAgent, 'boot 完成');
 
 const DOWNLOAD_PREFIX = '/api/mobile/workspace/content';
@@ -473,7 +478,7 @@ await t('文件卡（只有 fileId）：正文能打开预览，右侧没有下�
   hana.resetFileRoots();
   state.rootsFail = true;
   S.busy = false;
-  S.turn = null;
+  R.turn = null;
   h.getEl('transcript').innerHTML = '';
   const { closeFilePreview } = await import('../web/file-preview.js');
   closeFilePreview();
@@ -487,13 +492,13 @@ await t('文件卡（只有 fileId）：正文能打开预览，右侧没有下�
   });
   await h.settle(6);
 
-  const action = S.turnBody.querySelector('.file-card-action');
+  const action = R.turnBody.querySelector('.file-card-action');
   assert.ok(action, '夹具：应渲染出文件卡');
   assert.equal(action.hidden, true, '没有白名单地址时不能给一个点了必错的下载入口');
-  assert.equal(S.turnBody.querySelector('.file-card').dataset.href, undefined, '卡片上不该挂假地址');
+  assert.equal(R.turnBody.querySelector('.file-card').dataset.href, undefined, '卡片上不该挂假地址');
 
   // 正文照旧可点开：读走资源地址（fetch），壳不拦
-  S.turnBody.querySelector('.file-card-main').dispatchEvent('click');
+  R.turnBody.querySelector('.file-card-main').dispatchEvent('click');
   await h.settle(10);
 
   const title = h.doc.body.querySelector('.file-preview-title');
@@ -515,7 +520,7 @@ await t('文件卡（有工作区路径）：预览和下载入口都在', async
   state.rootsFail = false;
   hana.resetFileRoots();
   h.getEl('transcript').innerHTML = '';
-  S.turn = null;
+  R.turn = null;
   const { closeFilePreview } = await import('../web/file-preview.js');
   closeFilePreview();
   hana.startAssistantTurn();
@@ -536,7 +541,7 @@ await t('文件卡（有工作区路径）：预览和下载入口都在', async
   });
   await h.settle(8);
 
-  const card = S.turnBody.querySelector('.file-card');
+  const card = R.turnBody.querySelector('.file-card');
   assert.ok(card, '夹具：应渲染出文件卡');
   assert.ok(
     String(card.dataset.href || '').startsWith(DOWNLOAD_PREFIX),
@@ -558,6 +563,70 @@ await t('文件卡（有工作区路径）：预览和下载入口都在', async
   const dl = h.doc.body.querySelector('.file-preview-download');
   assert.ok(dl, '有工作区地址时预览里也应有下载按钮');
   closeFilePreview();
+});
+
+/* ------------------------------------------------------------------ */
+/* 3b. 缺陷 H6e：缩略图只走 /gw/file，没有真实路径就不发请求             */
+/* ------------------------------------------------------------------ */
+
+/** 开一轮并画一张文件卡；工作区映射故意失败，看的就是条目自己的地址。 */
+async function drawCard(block) {
+  S.session = { path: 'p-thumb', sessionId: 's-thumb', agentId: 'agent-1' };
+  hana.resetFileRoots();
+  state.rootsFail = true;
+  S.busy = false;
+  R.turn = null;
+  h.getEl('transcript').innerHTML = '';
+  const { closeFilePreview } = await import('../web/file-preview.js');
+  closeFilePreview();
+  hana.startAssistantTurn();
+  hana.handleEvent({
+    type: 'content_block',
+    block: { ...block, sessionId: 's-thumb', sessionPath: 'p-thumb' },
+    sessionId: 's-thumb',
+    sessionPath: 'p-thumb',
+  });
+  await h.settle(8);
+  const card = R.turnBody.querySelector('.file-card');
+  assert.ok(card, `夹具：应渲染出文件卡，block=${JSON.stringify(block)}`);
+  return card;
+}
+
+/** web/file-urls.js 的 b64url（URL 安全、无填充） */
+const gwFileUrl = (p) => `/gw/file/${Buffer.from(p, 'utf8').toString('base64url')}`;
+
+await t('图片卡（有 filePath）：缩略图走 /gw/file，不碰宿主的资源地址', async () => {
+  const before = state.resourceCalls;
+  const pic = 'C:/work/workspace/pics/p.png';
+  const card = await drawCard({ type: 'file', fileId: 'sf_pic', filePath: pic, label: 'p.png', ext: 'png' });
+
+  const img = card.querySelector('.file-card-icon img');
+  assert.ok(img, '有真实路径的图片应该有缩略图');
+  assert.equal(img.src, gwFileUrl(pic), '缩略图必须走正文图片用的那条 /gw/file 路由');
+  assert.equal(card.querySelector('.file-card-icon').textContent, '', '有缩略图时不再叠扩展名文字');
+  assert.equal(state.resourceCalls, before, '画卡片本身不能去请求 /api/resources/…（H6e 的 400）');
+});
+
+await t('图片卡（只有 fileId）：不画 img、不发请求，只给扩展名徽标', async () => {
+  const before = state.resourceCalls;
+  const card = await drawCard({ type: 'file', fileId: 'sf_pic2', label: '图片.png', ext: 'png' });
+
+  // 布尔断言：直接拿假 DOM 节点跟 null 比，失败时 assert 会把整棵树展开成报错文本（夹具里极慢）。
+  assert.equal(Boolean(card.querySelector('img')), false, '没有真实路径就不能猜一个地址去取缩略图');
+  assert.equal(card.querySelector('.file-card-icon').textContent, 'PNG', '应回到扩展名徽标');
+  assert.equal(state.resourceCalls, before, '没有 filePath 时一个请求也不该发');
+});
+
+await t('缩略图取不到（删除/403）：换回扩展名徽标，不留破图', async () => {
+  const card = await drawCard({
+    type: 'file', fileId: 'sf_pic3', filePath: 'C:/work/workspace/pics/gone.jpg', label: 'gone.jpg', ext: 'jpg',
+  });
+  const img = card.querySelector('.file-card-icon img');
+  assert.ok(img, '夹具：先有缩略图');
+
+  img.dispatchEvent('error');
+  assert.equal(Boolean(card.querySelector('.file-card-icon img')), false, '加载失败后不该还挂着 <img>');
+  assert.equal(card.querySelector('.file-card-icon').textContent, 'JPG', '应显示扩展名徽标');
 });
 
 /* ------------------------------------------------------------------ */

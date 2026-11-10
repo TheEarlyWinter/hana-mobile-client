@@ -1,6 +1,6 @@
 /* tests/chat_renderer_history_live.test.mjs — 历史页边界的「保住实时轮」
  *
- * 契约：历史契约（生成中翻页）的 2.3 / 3（单元 B）。
+ * 契约：docs/plans/2026-11-06-history-during-stream-contract.md 的 2.3 / 3（单元 B）。
  *
  * 背景：生成中允许「加载更早」后，一边在跑流式、一边往上面 prepend 历史页。
  * 历史回放同样走 startAssistantTurn，会把历史轮写进 state.turn 等实时轮指针；

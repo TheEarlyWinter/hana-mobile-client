@@ -30,7 +30,7 @@ function toFinite(value) {
  * @param {{getItem: Function, setItem: Function, removeItem: Function}|null} [options.storage]
  *   持久化入口；缺失或抛异常时只保留内存记忆
  * @param {number} [options.maxEntries=50] 最多保留多少条会话记录
- * @param {number} [options.maxAgeMs=7d] 记录最长保留多久
+ * @param {number} [options.maxAgeMs] 记录最长保留多久（默认 7 天）
  * @param {number} [options.throttleMs=400] 两次落盘之间的最小间隔
  * @param {string} [options.storageKey] 落盘用的 key
  * @param {() => number} [options.now] 时钟（测试注入假时钟）

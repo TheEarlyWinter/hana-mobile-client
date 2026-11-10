@@ -47,6 +47,8 @@ h.setFetch(async (url) => {
   if (path === '/api/sessions/messages') {
     state.historyCalls += 1;
     if (state.fail) return h.jsonRes({ detail: 'boom' }, { ok: false, status: 500 });
+    // before= 存在就是「加载更早」：给一页旧内容，模拟翻到了前一页。
+    if (/[?&]before=\d+/.test(String(url))) return h.jsonRes({ messages: [{ id: '80', role: 'assistant', content: 'OLDER-80', timestamp: '2026-11-01T00:00:00.000Z' }], blocks: [], hasMore: false });
     return h.jsonRes(state.page);
   }
   if (path === '/api/sessions') return h.jsonRes([]);
@@ -115,6 +117,29 @@ await t('重载失败：保留已加载的历史，不清屏', async () => {
   assert.ok(transcriptText().includes('NEW-HISTORY-2'), '失败后已加载的历史必须原样保留');
   assert.ok(/失败|重试/.test(barText()), `失败要在状态带里说明，实际：${barText()}`);
   state.fail = false;
+});
+
+await t('翻过更早页之后，后台补拉不能整页替换把旧页冲掉', async () => {
+  // 真机上的现场：搜索定位翻出更早页 → 宿主 idle 触发补拉 → 整页替换 → 旧页全没，
+  // 定位于是报「没找到」（轮次 44 → 29）。这里锁住「翻过历史就不允许后台整页替换」。
+  state.page = {
+    messages: [{ id: '100', role: 'user', content: 'TAIL-100', timestamp: '2026-11-02T00:00:00.000Z' }],
+    blocks: [],
+    hasMore: true,
+  };
+  await hana.loadHistory();
+  await h.waitFor(() => transcriptText().includes('TAIL-100'), '首屏换到新页');
+
+  await hana.loadOlderPage();
+  await h.waitFor(() => transcriptText().includes('OLDER-80'), '更早页应上屏');
+
+  const callsBefore = state.historyCalls;
+  await hana.loadHistory();
+  await h.settle(4);
+
+  assert.equal(state.historyCalls, callsBefore, '翻过历史后，后台补拉不该再发整页请求');
+  assert.ok(transcriptText().includes('OLDER-80'), `更早页必须还在，实际：${transcriptText()}`);
+  assert.ok(transcriptText().includes('TAIL-100'), '最新页也不能丢');
 });
 
 await t('会话切换仍然立刻清屏：旧会话的消息不能挂在新标题下面', async () => {

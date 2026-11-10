@@ -27,6 +27,8 @@ Thumbs.db
 # 本地日志与临时文件
 *.log
 gateway/logs/
+# 头像缩放缓存（gateway/avatar-cache.mjs 生成，可随时删）
+gateway/cache/
 tmp/
 
 # 个人部署配置：模板进仓库，真正的 remote.json（自己的隧道域名）不进

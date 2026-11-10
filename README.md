@@ -12,6 +12,36 @@
 
 如果你要的是稳定、可预期的官方支持，用官方桌面端，不要在手机上架这一套。
 
+## 最近更新（2026-11-09 → 11-10）
+
+这一轮没加新功能，主要是把真机反馈的毛病修掉、把结构收口，以及把“感觉慢”换成可复现的数字。
+
+**真机上真出过的问题**
+
+- **发完消息回列表再进来，自己那条气泡会消失**：整页重渲染把乐观气泡抹掉了，而助手那一侧有保护、用户这一侧没有。现在整页渲染时兜底补回（120 秒窗口内，页里已有就不补）。
+- **搜索定位有两处装配层缺陷**：给定位模块的查找函数少绑了一层容器，于是它把搜索词当容器用，永远返回 null；而“等首屏上屏”的判据是子节点数，偏偏历史控制带在发请求前就插进了消息区，这条等待等于不存在。前者是“点了搜索结果什么都不闪”，后者是“定位扫了空屏就报没找到”。现在判据改成“真的有轮次”，这两类错位都有用例钉住。
+- **翻过更早历史后再回前台，后台补拉会整页替换消息区**，翻出来的历史被冲回去（实测轮次从 153 掉回 29）。现在这次补拉不再整页替换。
+- **搜索超时、预算用完时不吭声，或者谎报“没有更多历史”**；重试成功的提示也压不掉上一条错误。三种口吻现在分开。
+- 图片卡缩略图只认真实路径，地址为空不再发请求。
+
+**性能（都有实测，不是估的）**
+
+- **头像在网关侧缩放成 WebP 并落盘缓存**：原图 1024×1024、单张 1.4–2.3MB，缩到十几 KB，冷启动省约 9.5MB。缓存头也从“一年 `immutable`”改成 5 分钟——以前换头像后客户端会一直看旧图。
+- **同一会话第二次打开**：尾部快照命中，`/api/sessions/messages` 198ms → 2ms。
+- **流式正文每帧整段重渲染**量过再决定不动：9.3k 字、2481 帧，帧间隔 p99 21ms，没有 O(n²)。
+- **历史 DOM 累积**同理：343 轮 / 2 万节点时 p95 90ms，暂不做窗口化，留作观察项。
+
+**结构与门禁**
+
+- 聊天区装配抽到 `web/chat-panel.js`；渲染状态收敛到 `web/renderer-state.js`，`app.js` 里那层转发与 getter 删了；三处重复实现（工具名、计数、base64url）各留一份。
+- 类型检查走 `tsc --checkJs`，把 JSDoc 当契约。历史噪音用棘轮（ratchet）锁基线：总数或单文件错误数变多就红，变少才放行。
+- 全量测试 **195 个文件**，CI 切四片并行；新用例里一批是装配层的——用真 `app.js` + 真搜索面板跑“搜到一条 → 点结果 → 高亮出现”，故意把签名改错就必须红。
+- 网关的 WebSocket 帧日志拆成第二条流：默认只记方向、操作、字节数和会话前 8 位，正文要显式开环境变量才落，且截断后脱敏。
+
+**版本**
+
+- 版本号只有一处来源：`node scripts/version.mjs set X`，会同时改 `package.json` 与 lockfile 顶层版本。打 APK 用 `scripts/build-apk.ps1`，命令行里不再手抄版本号。
+
 ## 长什么样
 
 一个同源网关、一套自己写的移动前端、一个极薄的 Android WebView 壳；后端仍然是官方 `hana-server`，它那行代码一行没改。手机上打开就是一个正常的聊天界面——会话列表、流式回复、卡片、文件、闲聊、归档都在；但它不是官方 App 的移植，是重新实现的。
@@ -60,19 +90,19 @@ Android 壳（WebView）──只做几件事──> 加载网关地址 / 切换
 | 目录 | 是什么 |
 |---|---|
 | `gateway/` | 网关：静态托管、API 反代、WebSocket 中继、卡片托管、边界策略 |
-| `web/` | 前端源码：78 个零依赖模块，`app.js` 只做装配；构建产物在 `web/dist/`（不进仓库） |
+| `web/` | 前端源码：94 个零依赖模块 + 23 份样式表，`app.js` 只做装配；构建产物在 `web/dist/`（不进仓库） |
 | `web/features/` | 按功能拆出来的部件（闲聊、搜索、归档），注册表负责顺序与销毁 |
 | `android/` | 壳：`MainActivity.java` + 手写构建脚本（aapt2 + javac + d8，无 Gradle） |
 | `scripts/` | 全量测试 runner、前端打包、发版脚本、真机调试工具 |
-| `tests/` | 165 个独立 Node 测试脚本；大多数不需要浏览器，少数（真布局、真滚动）要本机装 Chrome 或 Edge |
+| `tests/` | 195 个独立 Node 测试脚本；大多数不需要浏览器，少数（真布局、真滚动）要本机装 Chrome 或 Edge |
 | `docs/` | 前端构建与产物缓存的说明（[`docs/dev-build.md`](docs/dev-build.md)） |
 
 ## 前端构建
 
-前端原本是几十个 ES 模块 + 20 份样式表裸跑，网关对文本资源发 `no-store`，冷启动要重走 100 来个往返。现在合成两份产物，实测冷启动请求 **103 → 16**（静态资源 99 → 3）。
+前端原本是几十个 ES 模块 + 23 份样式表裸跑，网关对文本资源发 `no-store`，冷启动要重走 100 来个往返。现在合成两份产物，实测冷启动请求 **103 → 16**（静态资源 99 → 3）。
 
 ```powershell
-npm install          # 只装 esbuild（唯一的开发依赖）
+npm install          # 装两个开发依赖：esbuild（打包）+ typescript（只给类型闸门）
 npm run build        # 构建 web/dist 下的哈希产物与 manifest.json
 npm run build:watch  # 开发时自动重建
 ```
@@ -90,7 +120,7 @@ npm run build:watch  # 开发时自动重建
 | **Windows** | 启动与守护脚本是 Windows 专用的：`start.ps1` / `status.ps1` / `stop.ps1` 用 `Get-NetTCPConnection`、`Get-CimInstance`，守护走 `supervise.cmd`。装 PowerShell 7 也补不出等价实现 |
 | **可选的 Android SDK** | 只有要自己打 APK 才需要（`android/build.ps1` 直接用 `aapt2` / `d8` / `apksigner`，不依赖 Gradle），另需 JDK 17 |
 
-不需要的：数据库、Docker、云服务账号、任何运行时 npm 依赖。唯一开发依赖是 esbuild（构建前端用）。
+不需要的：数据库、Docker、云服务账号。运行时只有两个 npm 包：`pdfjs-dist`（PDF 预览）和 `sharp`（头像缩放）——后者是可选的，没装也能起网关，只是头像退回原图；开发依赖两个：esbuild（打包）、typescript（类型闸门，不参与运行时）。
 
 ## 跑起来
 
@@ -309,7 +339,7 @@ gateway/start.ps1 -Mode tailscale  # 监听 tailnet 的 100.x 地址
 ## 测试
 
 ```powershell
-node scripts/run-all-tests.mjs              # 全量，165 个文件，约 330 秒
+node scripts/run-all-tests.mjs              # 全量，195 个文件，约 450 秒
 node scripts/run-all-tests.mjs --shard 1/4  # 只跑四分之一，CI 用
 node scripts/run-all-tests.mjs --filter settings
 ```
@@ -320,15 +350,18 @@ node scripts/run-all-tests.mjs --filter settings
 
 这条硬超时不是洁癖：之前有测试断言全过、日志打出 `ALL PASS`，但进程因为留着定时器永远不退，外面等的人分不清"还在跑"和"已经卡死"。
 
-CI 在 `.github/workflows/ci.yml`：先做一遍语法检查，再把 165 个文件切成四片并行跑。
+CI 在 `.github/workflows/ci.yml`：先过一遍语法检查与类型棘轮闸门，再把 195 个文件切成四片并行跑。
 
 ## 打安装包
 
 ```powershell
-android/build.ps1 -VersionName 0.9.10 -VersionCode 13
+# 打 APK：版本从 package.json 读，命令行里不再出现版本号
+node scripts/version.mjs set 0.9.11
+pwsh -File scripts/build-apk.ps1            # 默认打 share 包
+pwsh -File scripts/build-apk.ps1 -Mode debug  # 开放调试端口的包，别外发
 ```
 
-产物在 `android/dist/`。构建脚本只用 Android SDK 自带的 `aapt2` / `d8` / `apksigner`，不依赖 Gradle。
+产物在 `android/dist/`。`scripts/build-apk.ps1` 只是把版本名拼好、跑前端、再调 `android/build.ps1`；后者只用 Android SDK 自带的 `aapt2` / `d8` / `apksigner`，不依赖 Gradle。
 
 发版（打包 + 校验 + 生成下载页）：
 
@@ -343,9 +376,20 @@ scripts/release.ps1 -VersionName 0.9.10 -VersionCode 13
 ## 几条不该被推翻的决定
 
 - **不改宿主源码**。它升级时我们不该被拖住，所以适配全部放在网关和前端。
-- **只加一个打包步骤，不引框架生态**。前端源码仍是原生 ES 模块、零运行时依赖，唯一开发依赖是 esbuild（把 78 个模块合成一份）；Android 侧是手写脚本，不用 Gradle。目标是少一层工具链、少一类“本地能跑、换台机器不行”。
+- **只加一个打包步骤，不引框架生态**。前端源码仍是原生 ES 模块（94 个），唯一开发依赖是 esbuild（把它合成一份）；类型检查只在闸门那一层用 typescript，不进入运行时；Android 侧是手写脚本，不用 Gradle。目标是少一层工具链、少一类“本地能跑、换台机器不行”。
 - **壳不许 `addJavascriptInterface`**。那个接口对所有 frame 生效，卡片 iframe 也能摸到原生对象。网页与原生只走 `WebMessageChannel`，端口只能由壳创建。
 - **前端更新不靠版本号**。网关对页面发 `no-store`，改完刷新就是新的，不用重装 APK。
+
+## 类型检查
+
+前端是纯 JS，类型靠 JSDoc 写、用 `tsc --checkJs` 核。起因是一次真机 bug：某个模块要 `(query) => Element`，装配处传了 `(container, query)`，单测因为假实现恰好对形而全绿——这类“签名对不上”只有类型检查拓得住。
+
+```powershell
+npm run typecheck         # 直接看全部错误
+npm run typecheck:gate    # 棘轮：只允许变少，不允许变多（CI 跑这个）
+```
+
+项目里还有一批 `@param {object}` 泛化的历史噪音，所以门禁不做“零错误才过”：那样只会被人用 `continue-on-error` 绕开。现在的规则是逐文件锁基线（[`docs/typecheck-baseline.json`](docs/typecheck-baseline.json)）：总数或任何单文件的错误数比基线多就红，变少才放行。
 
 ## 文档
 

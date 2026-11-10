@@ -6,7 +6,7 @@
  *   - 上游不可用 / 上游报错时拒绝（503），不降级放行
  *   - 软链接/junction 越界拒绝（403），根与目标都按 realpath 判定
  *   - 正常卡片目录资源可访问
- *   - WS 日志开关关闭时不写 ws-frames.log
+ *   - WS 帧日志开关关闭时不写 ws-frames 帧日志（请求日志照写入）
  *
  * 用 mock upstream 的 /api/web-auth/session 提供 {authenticated: boolean}，
  * 断言里不依赖真实 hana-server。
@@ -149,7 +149,7 @@ async function makeFixtures() {
   await fsp.symlink(evilCardDir, path.join(sessionFiles, 'card-evil'), linkType);
 }
 
-function gatewayEnv({ port, upPort }) {
+function gatewayEnv({ port, upPort, extra = {} }) {
   return {
     ...process.env, HANA_GATEWAY_LOG: 'off',
     HANA_HOME: hanaHome,
@@ -158,13 +158,14 @@ function gatewayEnv({ port, upPort }) {
     HANA_GW_HOST: '127.0.0.1',
     HANA_GW_PORT: String(port),
     HANA_GW_LOG_WS: '',
+    ...extra,
   };
 }
 
-async function startGateway({ upPort = upstreamPort, script = GATEWAY } = {}) {
+async function startGateway({ upPort = upstreamPort, script = GATEWAY, env = {} } = {}) {
   const port = await freePort();
   const child = spawn(process.execPath, [script], {
-    env: gatewayEnv({ port, upPort }),
+    env: gatewayEnv({ port, upPort, extra: env }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -313,9 +314,10 @@ t('静态资源不受鉴权影响，也不会去问上游', async () => {
   assert.equal(sessionCalls.length, before, '静态资源不应触发 session 查询');
 });
 
-t('WS 日志开关关闭时不写 ws-frames.log', async () => {
+t('WS 帧日志开关关闭时不写 ws-frames 帧日志（请求日志照写）', async () => {
   const copyDir = path.join(tmpRoot, 'gw-copy');
   const copyGatewayDir = path.join(copyDir, 'gateway');
+  const copyLogDir = path.join(copyDir, 'logs');
   await fsp.mkdir(copyGatewayDir, { recursive: true });
   const copyScript = path.join(copyGatewayDir, 'server.mjs');
   // 网关会 import 同目录的其他模块（local-owner / security-policy …）。
@@ -326,7 +328,11 @@ t('WS 日志开关关闭时不写 ws-frames.log', async () => {
     await fsp.copyFile(path.join(sourceGatewayDir, name), path.join(copyGatewayDir, name));
   }
 
-  const gw = await startGateway({ script: copyScript });
+  // 结构化日志开着、只关 WS 帧开关：断言才能区分「没开帧日志」和「日志整个没写」。
+  const gw = await startGateway({
+    script: copyScript,
+    env: { HANA_GATEWAY_LOG: '', HANA_GATEWAY_LOG_DIR: copyLogDir },
+  });
   await new Promise((resolve) => {
     const sock = net.connect(gw.port, '127.0.0.1', () => {
       sock.write(
@@ -341,16 +347,18 @@ t('WS 日志开关关闭时不写 ws-frames.log', async () => {
     sock.on('error', () => resolve());
   });
 
-  // 给 appendLog 落盘留一点时间（修复前这里会出现 OPEN 行）
+  // 给日志落盘留一点时间（修复前这里会出现一条帧日志）
   await new Promise((r) => setTimeout(r, 300));
-  const logPath = path.join(copyGatewayDir, 'ws-frames.log');
-  let exists = true;
-  try {
-    await fsp.access(logPath);
-  } catch {
-    exists = false;
-  }
-  assert.equal(exists, false, 'HANA_GW_LOG_WS 未开启时不应创建 ws-frames.log');
+  const names = await fsp.readdir(copyLogDir).catch(() => []);
+  assert.equal(
+    names.some((name) => name.startsWith('ws-frames-')),
+    false,
+    `HANA_GW_LOG_WS 未开启时不应产生帧日志，实际：${names.join(',')}`,
+  );
+  assert.ok(
+    names.some((name) => /^gateway-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)),
+    `请求日志应该照写（否则这条断言证明不了什么），实际：${names.join(',')}`,
+  );
   if (gw.child.exitCode === null) gw.child.kill();
 });
 

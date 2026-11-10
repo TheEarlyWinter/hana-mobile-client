@@ -185,6 +185,23 @@
   to { opacity: 0.85; }
 }
 
+/* ---------------- 空态 ---------------- */
+/* 加载结束但一条消息都没有：占满剩余高度、居中一句提示，别再给一片白。 */
+.casual-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  font-size: var(--fs-caption, 0.78rem);
+  color: var(--text-light, #9E9E9E);
+  user-select: none;
+}
+
+.casual-empty[hidden] {
+  display: none !important;
+}
+
 /* ---------------- 时间与未读分隔线 ---------------- */
 .casual-time-divider {
   display: flex;

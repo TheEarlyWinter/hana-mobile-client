@@ -8,6 +8,9 @@
  */
 
 import { CARD_RUNTIME_SCRIPT } from '../shared/card-runtime.mjs';
+// 卡片目录与 `/gw/file/<b64url(path)>` 用同一种编码：只留 file-urls.js 那一份，
+// 免得两边哪天差一个填充位就多出一种「有时能打开」的卡片地址。
+import { b64url } from './file-urls.js';
 
 const RESIZE_SCRIPT = `
 <script>
@@ -258,13 +261,6 @@ export function installCardHeightBridge({ window: win = globalThis.window, docum
   });
 }
 
-function b64url(s) {
-  const bytes = new TextEncoder().encode(s);
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 /** 把卡片目录映射成网关上的虚拟地址。 */
 export function cardUrlFor(dirPath) {
   if (!dirPath) return null;
@@ -292,6 +288,7 @@ export function extractCardDir(ev) {
 }
 
 /** 按目录渲染卡片（走网关的 /gw/card 虚拟路由，相对资源自然解析）。
+ * @param {object} [options]
  * @param {string} [options.sourceUrl] 父控制器 HEAD 校验后的同源最终 token URL；用于追加 nonce fragment。
  */
 export function renderCardByPath(dirPath, { title = '卡片', maxHeight = 0, hostBridge = null, context = null, sourceUrl = null, schedule = defaultSchedule } = {}) {

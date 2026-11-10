@@ -1,0 +1,34 @@
+{
+  // 纯 JS 项目的类型检查配置：不产出任何文件，只用 tsc 把 JSDoc 注解当成真契约来核对。
+  // 起因是一次真机 bug：createSearchJump 要 (query) => Element，装配处传了 (container, query)，
+  // 单测因为注入的假 finder 恰好是对的形状而全绿。tsc --checkJs 正好能抓这类「签名对不上」。
+  //
+  // 为什么是 ES2022 / ESNext：web/ 是直接跑在浏览器里的 ES 模块（esbuild 只打包与压缩），
+  // 没有降级到更老语法的需求，也没有 CJS 互操作；模块路径按 bundler 规则解析。
+  // lib 显式写全：默认的 es2022.full 已含 DOM，这里只是把依赖面写死，免得换 TS 版本后漂移。
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // 没有任何运行时依赖要用到 @types：浏览器全局由 lib.dom 提供，项目自有全局见 web/types/globals.d.ts
+    "types": [],
+    // TS 7 起 strict 默认 true。逐文件开 JSDoc 的 JS 项目直接接 strictNullChecks +
+    // noImplicitAny 会产出几千条「never / 隐式 any」，把真正的签名错配埋掉（实测 4246 条）。
+    // 先把开关钉在关闭状态，等 JSDoc 覆盖够了再一项项打开；取舍写在 tmp/typecheck-report.md。
+    "strict": false,
+    // node_modules 里的 JS 不是本次审查对象：pdfjs-dist 的 legacy 构建是 minify 前的 UMD，
+    // 被动态 import 拖进程序后会贡献几千条自己的隐式 any。
+    "maxNodeModuleJsDepth": 0,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    // 报告要逐条读：默认会把长类型截断成 "..."，反而看不出哪里不匹配
+    "noErrorTruncation": true
+  },
+  // 只看源码；web/dist 是 esbuild 产物（minify 后没有 JSDoc，报错也无从修）
+  "include": ["web/**/*.js", "web/**/*.d.ts"],
+  "exclude": ["web/dist/**", "node_modules"]
+}

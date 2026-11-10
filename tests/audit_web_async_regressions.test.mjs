@@ -431,33 +431,12 @@ await test('W3 返回层级：设置 > 归档 > 贴纸抽屉 > 闲聊 > 搜索�
   });
 });
 
-const W3_SIMULTANEOUS_OVERLAYS_REACHABLE = false;
+// 不把「搜索浮层与消息操作菜单同时打开」作为契约：搜索层是 fixed/inset:0 的全屏遮罩，
+// 且对话框标记 aria-modal；消息菜单也覆盖整个视口。用户操作搜索时触不到被遮罩的 transcript，
+// 只能从该 transcript 长按/右键打开消息菜单；反向打开时，消息菜单也遮住搜索入口。
+// 搜索结果选择会关闭搜索层，不提供同时打开消息菜单的入口。旧用例只靠直接调用两个 controller API
+// 强行共存，无法代表产品交互；真实搜索入口与真实消息菜单返回分别由下方 W3 用例覆盖。
 
-await test('W3 同为 z-index 65：后挂载的消息操作菜单应先于搜索浮层消费返回', async () => {
-  if (!W3_SIMULTANEOUS_OVERLAYS_REACHABLE) {
-    return skipCase('仅调试强开共存，真实路径未确认，待用户确认后再纳入契约。');
-  }
-  await withApp('w3-message-menu-over-search', {}, async ({ h, hana }) => {
-    const search = hana.features.get('search');
-    search.open();
-    assert.equal(hana.messageActionsMenu.open({
-      message: { role: 'assistant', id: 'assistant-top', text: '可复制消息', isLastAssistant: true },
-      context: { session: { path: 'C:/sessions/current.jsonl', sessionId: 'current' }, streaming: false },
-    }), true);
-    assert.equal(search.isOpen(), true);
-    assert.equal(hana.messageActionsMenu.isOpen(), true);
-    const searchOverlay = h.find(h.body, '.message-search-overlay');
-    const messageOverlay = h.find(h.body, '.msg-actions');
-    assert.ok(searchOverlay && messageOverlay, '两个真实 overlay 都必须挂入 document.body');
-    assert.ok(h.body.children.indexOf(messageOverlay) > h.body.children.indexOf(searchOverlay),
-      '搜索先打开，消息菜单后打开，消息 overlay 在 DOM 顺序上更靠上');
-
-    assert.equal(h.window.HanaMobile.back(), true);
-    assert.equal(hana.messageActionsMenu.isOpen(), false,
-      '消息菜单后于 search overlay 挂载，且二者 z-index 相同，应先关闭消息菜单');
-    assert.equal(search.isOpen(), true, '消费消息菜单返回不能顺带关闭搜索');
-  });
-});
 
 await test('W3 真实入口：搜索结果关闭搜索并进入聊天，真实消息菜单返回不退出会话', async () => {
   await withApp('w3-real-search-to-message-menu', {

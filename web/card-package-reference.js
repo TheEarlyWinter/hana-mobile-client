@@ -101,11 +101,11 @@ function declaresInlineSource(event, receipt, extractedCode) {
 /**
  * 解析 projected interactive_card 的 packageRef。
  *
- * @param {object} options
- * @param {object} options.event - 历史投影块（type: 'interactive_card'）
+ * @param {object} [options]
+ * @param {object} [options.event] - 历史投影块（type: 'interactive_card'）
  * @param {object} [options.receipt] - controller 解析出的 receipt（缺省由 event 自身承担）
- * @param {object} options.snapshot - 当前活动会话 { sessionId, sessionPath }
- * @param {object[]} options.sessionFiles - 官方 sessionFiles 目录元数据数组
+ * @param {object} [options.snapshot] - 当前活动会话 { sessionId, sessionPath }
+ * @param {object[]} [options.sessionFiles] - 官方 sessionFiles 目录元数据数组
  * @param {string|null} [options.inlineCode=null] - controller 已提取的 inline 源（html/srcdoc 等）
  * @returns {{status:'ignore'} | {status:'resolved', dirPath:string, sessionFile:object} | {status:'rejected', reason:string, message:string}}
  */

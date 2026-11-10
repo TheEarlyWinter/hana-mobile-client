@@ -62,8 +62,8 @@ function logoutErrorText(error) {
 }
 
 /**
- * @param {object} options
- * @param {(pathname: string, init?: object) => Promise<any>} options.api 同源请求函数
+ * @param {object} [options]
+ * @param {(pathname: string, init?: object) => Promise<any>} [options.api] 同源请求函数
  * @param {(result: object) => any} [options.onAuthenticated] 登录成功（Cookie 已由宿主写入）；
  *   调用方必须再用 /api/web-auth/session 核对官方 principal，返回 false 表示会话未生效。
  * @param {() => any} [options.onLoggedOut] 退出成功（Cookie 已由宿主清除）

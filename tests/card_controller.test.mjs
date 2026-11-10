@@ -13,6 +13,8 @@
 
 import assert from 'node:assert/strict';
 import { createCardController } from '../web/card-controller.js';
+import { cardUrlFor } from '../web/card.js';
+import { b64url as sharedB64url } from '../web/file-urls.js';
 
 let bad = 0;
 async function t(name, fn) {
@@ -280,7 +282,7 @@ await t('Package 模式: renderer 接收 hostBridge 与 context，controller 不
   };
 
   const validVersion = 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-  const pkgDir = 'C:\\Users\\example\\.hanako\\session-files\\s1\\c_dir';
+  const pkgDir = 'C:\\Users\\WIT\\.hanako\\session-files\\s1\\c_dir';
   const finalTokenUrl = `http://localhost:24000/gw/card/${b64url(pkgDir)}/index.html?token=tok123`;
 
   const fakeFetch = async (url, opts) => {
@@ -361,7 +363,7 @@ await t('Package 模式: HEAD 超时 deadline 触发明确错误占位，不无�
   const ev = {
     details: {
       cardId: 'card-pkg-timeout',
-      sessionFile: { isDirectory: true, realPath: 'C:\\Users\\example\\.hanako\\session-files\\s1\\c_timeout' },
+      sessionFile: { isDirectory: true, realPath: 'C:\\Users\\WIT\\.hanako\\session-files\\s1\\c_timeout' },
     },
   };
 
@@ -672,7 +674,7 @@ await t('clear(): 使在途 HEAD 请求失效，晚回包不插入卡片', async
 /* 6. packageRef：历史投影引用 + 官方 sessionFiles 目录元数据            */
 /* ------------------------------------------------------------------ */
 
-const PKG_DIR = 'C:\\Users\\example\\.hanako\\session-files\\s1\\c_pkg';
+const PKG_DIR = 'C:\\Users\\WIT\\.hanako\\session-files\\s1\\c_pkg';
 const PKG_SNAPSHOT = { sessionId: 's1', sessionPath: 'C:/s1.jsonl' };
 
 function pkgRecord(overrides = {}) {
@@ -946,6 +948,24 @@ await t('packageRef: 非 interactive_card 不解析引用，保持旧占位且�
   assert.equal(fetchCalls, 0);
   assert.equal(registerCount, 0);
   assert.equal(wrapper.querySelector('iframe'), null);
+});
+
+/* I3-3：卡片目录的 base64url 全库只留 web/file-urls.js 那一份（card.js / card-controller.js 不再自带）。
+ * 两边一旦分叉（填充位、`+` `/` 的替换写错）这里就红——这是那条合并的唯一可观测证据。 */
+await t('cardUrlFor: 目录编码与 file-urls 的 b64url 一致（共用一份实现）', () => {
+  for (const dir of [
+    'C:\\Users\\WIT\\.hanako\\session-files\\s1\\c_dir',
+    '/home/u/cards/a',
+    'C:\\工作\\卡片',
+    'a+b/c=d?e&f',
+    'a😀b',
+  ]) {
+    const url = cardUrlFor(dir);
+    assert.equal(url, `/gw/card/${b64url(dir)}/`, `期望字节（夹具算）：${dir}`);
+    assert.equal(url, `/gw/card/${sharedB64url(dir)}/`, `必须与 file-urls 的实现一致：${dir}`);
+  }
+  assert.equal(cardUrlFor(''), null, '空目录仍是 null，不拼出 /gw/card//');
+  assert.equal(cardUrlFor(null), null);
 });
 
 if (bad > 0) {

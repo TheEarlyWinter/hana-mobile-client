@@ -30,6 +30,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.MimeTypeMap;
@@ -72,7 +73,7 @@ import org.json.JSONObject;
  *
  * WebView 直接加载网关地址（同源），所以登录 cookie、WebSocket 全都自然成立。
  *
- * 本类只做七件事：
+ * 本类只做九件事：
  *   1. 加载用户选定的接入方式（本机 / USB、Tailscale、公网隧道、自定义，各自记忆一个地址），
  *      地址只能通过原生对话框修改
  *   2. 加载失败时给出可用的「接入方式」入口，而不是一个白屏
@@ -83,13 +84,16 @@ import org.json.JSONObject;
  *   5. 接管 <input type="file">：拍照走相机 App，选图走系统文件选择器
  *   6. 每种接入方式可以点「测试」做一次可达性探测（连接与读取各 4 秒，不随请求发送任何凭据）
  *   7. 一轮回复跑完时弹一条本地通知（应用在前台时不弹）；页面通过 WebMessage 通道
- *      叫它做事——这条通道只认 notify / requestPermission 两种动作，不是通用 RPC
+ *      叫它做事——这条通道只认 notify / requestPermission / screen 三种动作，不是通用 RPC
+ *   8. 别的应用「分享」一段文字进来时把它投给页面：只收 text/plain，桥就绪之前先攒着，
+ *      页面加载完、握手成功后再投（冷启动就是在页面加载完之后才投）
+ *   9. 页面可以让窗口保持屏幕常亮（生成中别锁屏）；页面看不见（onPause）时无条件交还
  *
  * 一条硬规矩：**不向网页注入任何 Java 对象**。addJavascriptInterface 对所有 frame 生效
  * （包括 show_card 渲染出的卡片 iframe），等于把「持久篡改开始地址」这种能力交给任意
  * 一张卡片。改地址只在原生对话框里发生，网页侧既碰不到也改不了。
  *
- * 页面确实需要原生做事时（发通知），走 WebMessageChannel：原生 createWebMessageChannel()
+ * 页面确实需要原生做事时（发通知 / 保持屏幕常亮），走 WebMessageChannel：原生 createWebMessageChannel()
  * 建一对端口，postWebMessage() 把页面那一端**只投给主 frame**，且只投给 origin 相符的
  * 文档——卡片 iframe 既拿不到端口，也冒充不了来源。见本文后面的「JS → 原生通道」一节。
  *
@@ -122,7 +126,7 @@ public class MainActivity extends Activity {
     /** 本机 / USB 回家走 adb reverse，地址固定是回环。 */
     private static final String LOCAL_URL = "http://127.0.0.1:24000/";
     /** 自定义方式的初始值（与旧版保持一致）；全新安装走「本机 / USB」，不用它。 */
-    private static final String DEFAULT_URL = "http://192.168.1.10:24000/";
+    private static final String DEFAULT_URL = "http://192.168.31.89:24000/";
     private static final String[] MODE_LABELS = {"本机 / USB", "Tailscale", "公网隧道", "自定义"};
     private static final String[] MODE_PLACEHOLDERS = {
             LOCAL_URL, "http://100.x.x.x:24000/", "https://", "http://主机:端口/"};
@@ -162,6 +166,16 @@ public class MainActivity extends Activity {
      */
     private static final String JS_HANA_MARKER =
             "!!document.querySelector('meta[name=\"hana-shell\"]')";
+
+    /* ---------------- 系统分享进来的文本 ---------------- */
+
+    /** 分享正文的字符上限：超出截断，整条照收（不丢）。8000 字已经是一屏长文。 */
+    private static final int SHARE_TEXT_MAX = 8000;
+    /**
+     * 下行 share 报文的字符上限：与页面侧 MAX_INBOUND_CHARS（16384）对齐。
+     * 页面是按这个上限整条丢的，所以这边拼出来的报文也必须不超——超出就丢标题保正文。
+     */
+    private static final int SHARE_MESSAGE_MAX = 16384;
 
     /* ---------------- 回合完成通知 ---------------- */
 
@@ -231,6 +245,10 @@ public class MainActivity extends Activity {
     private boolean activityResumed;
     /** 窗口焦点：onWindowFocusChanged 维护（拉下通知栏 / 弹系统对话框时都算没焦点）。 */
     private boolean windowFocused;
+    /** 待投递给页面的分享正文；null 表示没有待投递内容（桥没就绪就一直留着，不丢）。 */
+    private String pendingShareText;
+    /** 待投递的分享标题；空串表示这次分享没带标题。 */
+    private String pendingShareTitle = "";
     /** 原生这一端的消息端口；null 表示页面还没接过（或已失效）。 */
     private WebMessagePort bridgePort;
     /** 页面回了 hello：握手完成，剩下的重投全部停掉。 */
@@ -255,6 +273,10 @@ public class MainActivity extends Activity {
         currentMode = normalizeMode(prefs.getString(KEY_LAST_MODE, null));
         // 存量值可能被旧版本写坏，统一过一遍校验；不合格就当没配，走对话框
         startUrl = normalizeStartUrl(rememberedUrlFor(currentMode));
+
+        // 冷启动：从系统「分享」进来时先把文本收下来。页面这时还没加载、桥也不存在，
+        // 所以只存不发；等 onPageFinished 握手成功、bridgeAcked 置位后再投（deliverPendingShare）。
+        captureSharedText(getIntent());
 
         // 通知通道先建好（幂等）：之后任何一条通知都直接往里丢。
         ensureNotificationChannel();
@@ -411,6 +433,19 @@ public class MainActivity extends Activity {
         }
 
         Log.i(TAG, "started with " + redactUrlForLog(startUrl));
+    }
+
+    /**
+     * 应用已经在后台 / 已在前台时又来一条分享（launchMode=singleTask，不会重开 Activity）。
+     *
+     * 两种时候都要接：桥已经就绪就立即投，没就绪（页面正在重载 / 还没握手）就只存着。
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);              // 让 getIntent() 与最近一次进来的内容一致
+        captureSharedText(intent);
+        deliverPendingShare();          // 桥已经握手成功的话，这条不用等页面重载
     }
 
     /* ------------------------------------------------------------------ */
@@ -1709,7 +1744,116 @@ public class MainActivity extends Activity {
     }
 
     /* ------------------------------------------------------------------ */
-    /* JS → 原生通道（WebMessageChannel，只做通知）                          */
+    /* 系统分享进来的文本                                                   */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * 收下一条「分享进来」的文本，存成待投递内容。
+     *
+     * 只认 ACTION_SEND + text/plain。**image/* 这一版不接**：桥的单条报文有字符上限，
+     * 图片只能 base64 进来，那等于把壳当成文件传输通道用（还得把整张图抄进 WebView 的堆）。
+     * 取不到正文就什么也不做——空分享不占着待投递位，免得后面真正的分享被它顶掉。
+     */
+    private void captureSharedText(Intent intent) {
+        if (intent == null) return;
+        try {
+            if (!Intent.ACTION_SEND.equals(intent.getAction())) return;
+            String type = intent.getType();
+            if (!isPlainTextShare(type)) {
+                // 只记类型本身，不记内容：分享过来的可能是私事
+                Log.i(TAG, "share ignored: type=" + (type == null ? "(none)" : type));
+                return;
+            }
+            String text = sanitizeShareText(intent.getCharSequenceExtra(Intent.EXTRA_TEXT), SHARE_TEXT_MAX);
+            if (text.isEmpty()) {
+                Log.i(TAG, "share ignored: empty text");
+                return;
+            }
+            pendingShareText = text;
+            // 标题同一套上限（只当提示用，页面侧可以自己再收紧）
+            pendingShareTitle = sanitizeShareText(
+                    intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT), SHARE_TEXT_MAX);
+            Log.i(TAG, "share captured: text=" + pendingShareText.length()
+                    + " title=" + pendingShareTitle.length());
+        } catch (Throwable t) {
+            Log.w(TAG, "failed to read shared text");
+        }
+    }
+
+    /** 分享类型只要 text/plain 本身（容忍 text/plain;charset=utf-8 这类带参数写法）。 */
+    private static boolean isPlainTextShare(String type) {
+        if (type == null) return false;
+        String base = type;
+        int semicolon = base.indexOf(';');
+        if (semicolon >= 0) base = base.substring(0, semicolon);
+        return "text/plain".equalsIgnoreCase(base.trim());
+    }
+
+    /**
+     * 把待投递的分享投给页面。
+     *
+     * 两个前提：端口在手 + 页面回过 hello（bridgeAcked）。没就绪就原样留着，下次握手成功再投；
+     * 错误页（没有我们的脚本）和页面重载期间都走这条路，所以这里不检查 web.getUrl()。
+     * 投递成功才清空；失败（端口刚死）也保留，宁可重投一次也不丢用户分享的东西。
+     */
+    private void deliverPendingShare() {
+        String text = pendingShareText;
+        if (text == null) return;
+        if (!bridgeAcked || bridgePort == null) return;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("v", BRIDGE_PROTOCOL_VERSION);
+            payload.put("action", "share");
+            payload.put("kind", "text");
+            payload.put("text", text);
+            payload.put("title", pendingShareTitle == null ? "" : pendingShareTitle);
+            String data = payload.toString();
+            if (data.length() > SHARE_MESSAGE_MAX) {
+                // 正文里引号 / 反斜杠多的时候 JSON 转义会把报文拉长：宁可丢掉标题，也不让页面整条丢
+                payload.remove("title");
+                data = payload.toString();
+            }
+            bridgePort.postMessage(new WebMessage(data));
+            pendingShareText = null;
+            pendingShareTitle = "";
+            Log.i(TAG, "share delivered: text=" + text.length());
+        } catch (Throwable t) {
+            Log.w(TAG, "share delivery failed");
+        }
+    }
+
+    /**
+     * 分享正文 / 标题的清洗与截断：统一换行、制表符当空格、去掉其余控制字符，再按字符数截断。
+     *
+     * 纯 Java（不碰 android.*），和 clampNotificationText 同一规格，可被裸 JVM 测试直接执行。
+     * 与通知文案的区别是**保留换行**：分享过来的多半是正文，压成一行就读不懂了。
+     * 截断不留半个 emoji：切在高位代理上就往前退一格，否则页面拿到的是一个坏字符。
+     */
+    static String sanitizeShareText(CharSequence raw, int max) {
+        if (raw == null || max <= 0) return "";
+        StringBuilder out = new StringBuilder(Math.min(raw.length(), max));
+        for (int i = 0; i < raw.length() && out.length() < max; i += 1) {
+            char c = raw.charAt(i);
+            if (c == '\r') {
+                if (i + 1 < raw.length() && raw.charAt(i + 1) == '\n') i += 1;   // \r\n 只当一个换行
+                out.append('\n');
+                continue;
+            }
+            if (c == '\t') {
+                out.append(' ');
+                continue;
+            }
+            if (Character.isISOControl(c)) continue;
+            out.append(c);
+        }
+        if (out.length() == max && Character.isHighSurrogate(out.charAt(max - 1))) {
+            out.setLength(max - 1);
+        }
+        return out.toString().trim();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* JS → 原生通道（WebMessageChannel，只做通知 / 权限 / 屏幕常亮）          */
     /* ------------------------------------------------------------------ */
 
     /**
@@ -1776,7 +1920,7 @@ public class MainActivity extends Activity {
     /**
      * 端口上来的每一条消息。
      *
-     * 只认两种动作：notify / requestPermission。另外认一个无副作用的 hello（握手回执），
+     * 只认三种动作：notify / requestPermission / screen。另外认一个无副作用的 hello（握手回执），
      * 它不是一个动作。这不是通用 RPC，别往里加东西。
      */
     private void handleBridgeMessage(WebMessagePort port, String data) {
@@ -1798,7 +1942,11 @@ public class MainActivity extends Activity {
             return;
         }
         if (msg.optBoolean("hello", false)) {
-            if (port == bridgePort) bridgeAcked = true;
+            if (port == bridgePort) {
+                bridgeAcked = true;
+                // 握手刚成功：把攒着的分享投出去（冷启动 / 页面重载时收到的那些都在这）
+                deliverPendingShare();
+            }
             Log.i(TAG, "native bridge ready");
             return;
         }
@@ -1811,7 +1959,47 @@ public class MainActivity extends Activity {
             handlePermissionRequest(port, msg.optString("id", ""));
             return;
         }
+        if ("screen".equals(action)) {
+            handleScreenFlag(msg);
+            return;
+        }
         Log.w(TAG, "bridge message dropped: unsupported action");
+    }
+
+    /**
+     * 页面要「保持屏幕常亮」。只收真正的布尔值：'true' / 1 / 缺失一律忽略（没回执）。
+     *
+     * 这条不需要回执：页面只想知道开关有没有生效，壳这边没有可拒绝的业务理由
+     * （拿不到窗口标志也顶多是不生效）。
+     */
+    private void handleScreenFlag(JSONObject msg) {
+        Object raw = msg.opt("on");
+        if (!(raw instanceof Boolean)) {
+            Log.w(TAG, "screen action dropped: bad flag");
+            return;
+        }
+        final boolean on = (Boolean) raw;
+        // 回调可能在非 UI 线程上：窗口标志只许在主线程改
+        runOnUiThread(() -> applyKeepScreenOn(on));
+    }
+
+    /**
+     * 加 / 清 FLAG_KEEP_SCREEN_ON。
+     *
+     * 用窗口标志而不是 WakeLock：它随窗口生命周期走（页面看不见时系统自己就不再生效），
+     * 而且不需要 WAKE_LOCK 权限。onPause 里还会再无条件清一次。
+     */
+    private void applyKeepScreenOn(boolean on) {
+        try {
+            if (on) {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            } else {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        } catch (Throwable t) {
+            // 窗口已经没了（正在销毁）：没什么可做的，也不能因此崩掉壳
+            Log.w(TAG, "keep screen on unavailable");
+        }
     }
 
     /**
@@ -1978,6 +2166,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         activityResumed = false;
+        // 页面看不见了就不该占着屏幕常亮：无条件清掉（不看页面发过什么）。
+        // 回到前台由页面重新发一条——生成中会重发，它自己知道还在生成。
+        applyKeepScreenOn(false);
         if (web != null) {
             CookieManager.getInstance().flush();
         }

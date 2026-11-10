@@ -71,10 +71,10 @@ function formatError(err) {
 /**
  * 创建消息搜索组件实例
  *
- * @param {object} options
- * @param {Document} options.document DOM 容器所在的文档对象
+ * @param {object} [options]
+ * @param {Document} [options.document] DOM 容器所在的文档对象
  * @param {HTMLElement} [options.container] 搜索面板挂载的父容器（默认 document.body）
- * @param {(query: string) => Promise<Array<{sessionTitle?: string, snippet?: string, path: string, sessionId?: string, timestamp?: number|string}>>} options.onSearch 搜索异步回调
+ * @param {(query: string) => Promise<Array<{sessionTitle?: string, snippet?: string, path: string, sessionId?: string, timestamp?: number|string}>>} [options.onSearch] 搜索异步回调
  * @param {(result: object) => void} [options.onSelect] 选中单项搜索结果的回调
  * @param {() => void} [options.onClose] 面板关闭时的回调
  * @param {number} [options.debounceMs] 输入防抖延时（默认 150ms，测试中可传 0 立即触发）

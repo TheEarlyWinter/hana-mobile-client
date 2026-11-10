@@ -43,7 +43,8 @@ export function createCasualFeature({ state, getElement, api, flash, avatarUrl, 
     onSend: (text) => { void store.send(text); },
     onLoadEarlier: () => { void store.loadEarlier(); },
     // 视图传的是条目 id（服务端条目是 sourceEntryId），store 两种都认。
-    onMarkRead: (entryId) => { void store.markReadThrough(entryId); },
+    // 必须把 Promise 递回去：View 要等结果才记账，失败才能重试。
+    onMarkRead: (entryId) => store.markReadThrough(entryId),
     onOpenStickers: () => { stickers.open(); },
     onRetry: (entryId) => { void store.retry(entryId); },
     // 返回只关面板不够：还要停轮询，否则后台每 4 秒还在拉。
@@ -165,14 +166,34 @@ export function createCasualFeature({ state, getElement, api, flash, avatarUrl, 
     return true;
   }
 
-  /** WS 连上时把轮询放宽，断开时收回。 */
+  /**
+   * WS 连上时把轮询放宽，断开时收回。
+   *
+   * 重连后不能只改间隔就完事：断线期间漏掉的推送没人补，面板开着也要等一个 30 秒兜底轮询，
+   * 面板关着则根本没有轮询。所以连上时如果面板是开的，立刻对一次账（refresh 自带单飞，
+   * 正在加载时直接复用它）。对账没结束前不放宽间隔，避免「刚连上就放宽、账还没对」的窗口。
+   */
   function setSocketLive(ready) {
-    store.setPollMs(ready ? POLL_MS_LIVE : POLL_MS_OFFLINE);
+    if (!ready) {
+      store.setPollMs(POLL_MS_OFFLINE);
+      return;
+    }
+    if (!store.isOpen()) {
+      store.setPollMs(POLL_MS_LIVE);
+      return;
+    }
+    // 对账没成功就不算「已对完账」：保持收紧的间隔，下一轮早点重试。
+    store.refresh().then(
+      (ok) => store.setPollMs(ok === false ? POLL_MS_OFFLINE : POLL_MS_LIVE),
+      () => store.setPollMs(POLL_MS_OFFLINE),
+    );
   }
 
   /** 换助手：视图和轮询先收掉，角标按新助手重拉。 */
   function setAgent() {
     view.close();
+    // 旧草稿是写给旧助手的，不能带到新会话里。
+    view.reset();
     store.close();
     const agentId = state.currentAgent?.id;
     if (agentId) {
@@ -233,6 +254,8 @@ export function createCasualFeature({ state, getElement, api, flash, avatarUrl, 
     close();
     hideBadge();
     store.reset?.();
+    // 登出后输入框、已读去重、节流都不属于下一段会话。
+    view.reset();
   }
 
   return {

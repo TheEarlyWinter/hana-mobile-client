@@ -3,9 +3,7 @@
  * 本版按官方桌面端的视觉语言重做布局：文档式阅读、浅灰用户气泡、卡片式输入区。
  */
 
-import { el } from './dom.js';
 import { createToaster } from './toast.js';
-import { installCodeCopy } from './code-copy.js';
 import { createConnectionBanner } from './connection-banner.js';
 import { createDraftStore } from './draft-store.js';
 import { createLightbox } from './lightbox.js';
@@ -16,29 +14,31 @@ import { closeFilePreview } from './file-preview.js';
 import { createSessionFileUrls } from './file-urls.js';
 import { workspaceUrlForFile, matchWorkspaceByLabel, buildWorkspaceContentUrl } from './file-source.js';
 import { createStreamState } from './stream-state.js';
+import { createAbortQueue } from './abort-queue.js';
+import { createEchoGuard } from './echo-guard.js';
 import { createApiClient } from './http-client.js';
 import { createAvatarView, agentAvatarUrl } from './avatar-view.js';
 import { createAvatarPack } from './avatar-pack.js';
-import { createSessionListView, sessionFolder as sessionFolderBase, baseName, sessionTitle } from './session-list-view.js';
+import { createSessionListView, baseName, sessionTitle } from './session-list-view.js';
 import { createSessionActions, createSessionActionsView, sameSession } from './session-actions.js';
-import { createSessionListController } from './session-list-controller.js';
+import { createSessionPanel } from './session-panel.js';
+import { createAgentCarousel } from './agent-carousel.js';
 import { createLoginController } from './login-controller.js';
 import { createLoginView } from './login-view.js';
-import { createSessionNamespaceTabs } from './session-namespace-tabs.js';
-import { createNewSessionLabel } from './new-session-label.js';
 import { createActionConfirmation } from './action-confirmation.js';
 import { createCardBridge } from './card-bridge.js';
 import { createCardController } from './card-controller.js';
 import { createWorkspaceService } from './workspace-service.js';
 import { createWorkspaceView } from './workspace-view.js';
 import { createWebsocketClient } from './websocket-client.js';
-import { createChatRenderer } from './chat-renderer.js';
+import { createChatPanel } from './chat-panel.js';
+import { createRendererState } from './renderer-state.js';
+import { createFinishedNotice, formatNotice } from './finished-notice.js';
 import { createEventRouter } from './event-router.js';
 import { createComposer } from './composer-controller.js';
 import { createConversationController } from './conversation-controller.js';
 import { createMobileLifecycle } from './mobile-lifecycle.js';
-import { createSettingsController } from './settings-controller.js';
-import { createSettingsView } from './settings-view.js';
+import { createSettingsPanel } from './settings-panel.js';
 import { createChatViewMode } from './chat-view-mode.js';
 import { createThemeController, THEME_META_COLORS } from './theme.js';
 import { sereneSummary } from './turn-summary.js';
@@ -60,6 +60,8 @@ import { resolveAgentLabel } from './agent-label.js';
 
 const $ = (id) => document.getElementById(id);
 
+/* 应用级状态。流式渲染进度（一轮消息画到哪儿了）不在这里：那份归 chat-renderer 私有，
+ * 见 web/renderer-state.js；这里的 S 只放登入、会话、连接、输入区这些应用级的东西。 */
 const S = {
   principal: null,
   sessions: [],
@@ -72,39 +74,53 @@ const S = {
   userName: '你',
   homeFolder: '',
   memoryOn: null,
-  // 流式状态
-  turn: null,
-  turnBody: null,
-  turnFootEl: null,
-  turnMeta: null,
-  textEl: null,
-  streamingRaw: '',
-  thinkAt: 0,
-  replaying: false,
-  moodEl: null,
-  moodRaw: '',
   busy: false,
-  ctxPct: null,
-  // 上面那条「已读回执」提示触发的重拉历史，限频用
-  lastResyncAt: 0,
-  // 本轮计时（写到消息尾注里）
-  turnStart: 0,
-  firstTokenMs: 0,
-  charCount: 0,
-  speed: 0,
   // 附件：聊天页与首页各一份托盘，上限与渲染共用
   attach: [],
   homeAttach: [],
   attachSeq: 0,
-  // 断线时点的「停止」：等连接恢复后补发，不在本地假装已停
-  pendingAbort: null,
-  // 本地已渲染但可能被服务端回显的用户消息，用来去重
-  sentInputs: new Set(),
-  lastLocalUser: null,
 };
+
+/* 流式渲染状态：渲染器私有，装配时注入（createChatRenderer 的 state 参数）。
+ * 必须建在 renderer 之前；渲染器只认识它，不再认识 S。 */
+const rendererState = createRendererState();
 
 // 流式游标唯一实例：app 里不再把 streamId/lastSeq 挂在 S 上。
 const streamState = createStreamState();
+
+/* 「刚发出去的那条」：composer 记一笔、event-router 核销（去重语义全在 web/echo-guard.js）。
+ * 两边必须拿到同一个实例：分头自建就永远对不上号。 */
+const echoGuard = createEchoGuard();
+
+/* 兼容入口：这两个名字原来长在 S 上，现在归 echoGuard：tests/send_race 用
+ * S.sentInputs.clear() 重置，tests/composer_controller、tests/pending_state 直接读写
+ * state.sentInputs / state.lastLocalUser。只给 getter：业务代码一律走实例，别在这里写。
+ *
+ * 渲染器那批字段（turn / streamingRaw / …）的转发层已在 D2 删除：夹具直接读
+ * hana.rendererState。上下文占用也有自己的主人（conversation-controller 的副标题）。
+ */
+Object.defineProperty(S, 'sentInputs', {
+  enumerable: true,
+  get: () => echoGuard.ids,
+});
+Object.defineProperty(S, 'lastLocalUser', {
+  enumerable: true,
+  get: () => echoGuard.lastLocalUser,
+});
+
+/* 断线时点的「停止」：队列归 web/abort-queue.js，composer 写、websocket-client 重连后补发，
+ * 两边拿到的是下面这一个实例。S 上只留一层兼容访问器——tests/abort_pending.test.mjs
+ * 还按 S.pendingAbort 断言与重置（8 处），那些断言不在本次改写范围里。
+ * 业务代码一律走 abortQueue（或注入的实例），不要用这一层。 */
+const abortQueue = createAbortQueue();
+Object.defineProperty(S, 'pendingAbort', {
+  enumerable: true,
+  get: () => abortQueue.peek(),
+  set: (value) => {
+    if (value) abortQueue.push(value);
+    else abortQueue.clear();
+  },
+});
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 const LAYOUT_PROBE_BUILD = 'layout-probe-20261102-a'; // 临时取证标记；设备验收后移除
@@ -132,13 +148,16 @@ function autoGrow(el) {
  * 顶层只留这一个实例，挂在 document.body 上；根节点 id 仍是 #flashBar。
  */
 let toaster = null;
+/** 上一次 bootstrap 失败留下的那条提示（重试成功时要按它关掉）。 */
+let bootFailToast = null;
 function flash(text, opts) {
   if (!toaster) {
     if (!document || !document.body) return;
     toaster = createToaster({ doc: document, mount: document.body });
   }
   // 默认按 error 处理：现在的调用点九成是失败提示，宁可常驻也不能让人没读到
-  toaster.show(text, { level: 'error', ...(opts || {}) });
+  // 返回快照（带 id）：调用方拿到后可以 dismiss 掉自己那条（如 bootstrap 重试成功）。
+  return toaster.show(text, { level: 'error', ...(opts || {}) });
 }
 
 /**
@@ -162,16 +181,14 @@ const invokeApi = createApiClient({ timeoutMs: 150000 });
 /* 聊天视图（沉静 / 经典）的装配点。
  * 数据在 chat-view-mode（读 /api/preferences/chat-ui），摘要文案在 turn-summary，
  * 渲染器与设置面板都不 import 它们，只收模式字符串和格式化函数。 */
+// 初值是空函数，真正的实现到下面的 applyViewMode = (mode) => … 才装上；
+// 两处（渲染器 + 详情页）都只认沉静/经典两种模式。
+/** @type {(mode: 'serene' | 'classic') => void} */
 let applyViewMode = () => {};
 const chatViewMode = createChatViewMode({
   api,
   onChange: (mode) => applyViewMode(mode),
 });
-/** 设置面板每次渲染都把当前模式带进去，避免服务端偏好变化后面板沿用旧值。 */
-function renderSettings(state) {
-  // 显式判空：settingsView 与 settingsController 都要先建好，将来谁先 notify 都不会撞 TDZ
-  settingsView?.render?.({ ...state, viewMode: chatViewMode.current(), themeMode: theme.current() });
-}
 
 /*
  * 外观（浅色 / 深色 / 跟随系统）。纯本地偏好，不上服务端：换设备、登出都不应把屏刷白。
@@ -297,100 +314,43 @@ const cardController = createCardController({
 /* ------------------------------------------------------------------ */
 
 /*
- * 这里只做装配：状态与请求在 settings-controller，DOM 在 settings-view。
- * 两个模块都不知道彼此和应用的存在。
+ * 装配在 settings-panel：controller、view 与四个异步写的归属校验都在那边。
+ * 这里只递进宿主的能力——状态读取、主题与聊天视图的落地点、模型 chip 与提示。
  */
-const settingsController = createSettingsController({
-  request: (pathname, init) => api(pathname, init),
-  onStateChange: (state) => renderSettings(state),
-});
-
-const settingsView = createSettingsView({
-  container: $('settingsContainer'),
+const settingsPanel = createSettingsPanel({
   document,
-  onClose: () => settingsView.close(),
-  // 聊天视图同接入方式一样：视图只发意图，落库与重画在装配层。
-  viewMode: chatViewMode.current(),
-  onSelectViewMode: (mode) => chatViewMode.set(mode),
-  // 外观同理：视图只报「用户选了哪档」，落地、订阅系统主题都在 theme 控制器里。
-  themeMode: theme.current(),
-  onSelectTheme: (mode) => theme.set(mode),
-  // 接入方式与退出登录从抽屉底部收进设置面板：视图只发意图，壳协议与登录流程留在这里。
-  onServerMode: () => {
-    location.href = 'hana-setup://edit-url';
+  getElement: $,
+  api,
+  views: {
+    closeDrawer: () => sessionPanel.closeDrawer(),
+    // 退出登录：生成中不自动停工具/会话，只提示用户稍后再来（兜底在 switchLogin 里）。
+    openLogin: () => switchLogin(),
+    // 壳里拦截 hana-setup:// 弹原生对话框（本页与壳同源、且是用户手势才会被受理）。
+    goServerMode: () => {
+      location.href = 'hana-setup://edit-url';
+    },
   },
-  onLogout: () => switchLogin(),
-  onSelectModel: async (modelId, provider) => {
-    // 请求是异步的：先钉住「这次点击属于谁、哪个会话、哪次导航」，回调回来再核。
-    const owner = S.principal;
-    const session = S.session;
-    const epoch = conv.navigationEpoch();
-    const stillMine = () => S.principal === owner && S.session === session && conv.navigationEpoch() === epoch;
-    try {
-      const res = await settingsController.switchModel(modelId, provider);
-      if (!stillMine()) return;
-      // controller 返回 null = 过期写/重复写（新 load 或 dispose 已推进代次），不得回写 chip。
-      if (res === null || res === undefined) return;
-      // 写已生效：先作废写之前发出的 chip GET，再画新模型，避免旧 GET 晚到盖回来。
+  getState: () => S,
+  hooks: {
+    navigationEpoch: () => conv.navigationEpoch(),
+    findAgentForSession,
+    renderModelChip,
+    // 写成功后作废写之前发出的 chip GET（计数器归 app 维护，syncSessionModelChip 读它）。
+    bumpChipToken: () => {
       sessionModelChipToken += 1;
-      renderModelChip(res?.model || res?.modelId || modelId);
-    } catch (err) {
-      if (!stillMine()) return;
-      flash(err?.message || '切换模型失败');
-    }
+    },
+    flash,
+    isStreaming: () => Boolean(S.busy),
+    onThemeSelect: (mode) => theme.set(mode),
+    onViewModeSelect: (mode) => chatViewMode.set(mode),
+    currentViewMode: () => chatViewMode.current(),
+    currentThemeMode: () => theme.current(),
   },
-  onSelectThinkingLevel: async (level) => {
-    // 与模型写同一套归属：思考写的迟到结果不能落到新会话/新身份头上。
-    const owner = S.principal;
-    const session = S.session;
-    const epoch = conv.navigationEpoch();
-    const stillMine = () => S.principal === owner && S.session === session && conv.navigationEpoch() === epoch;
-    try {
-      const res = await settingsController.setThinkingLevel(level);
-      if (!stillMine()) return;
-      // null = 过期写/重复写；思考级别不改模型 chip，设置面板由 controller 自己重绘。
-      if (res === null || res === undefined) return;
-    } catch (err) {
-      // 旧会话/旧身份的错误不能冒到当前界面；只有仍属于本次点击才提示。
-      if (!stillMine()) return;
-      flash(err?.message || '切换思考级别失败');
-    }
-  },
-  onSelectFontSize: (size) => {
-    settingsController.setFontSize(size);
-    renderSettings(settingsController.getState());
-  },
-  onRetry: () => settingsController.retry(),
-  // 只重拉档位：不重拉模型列表，也不把整个面板打进加载态。
-  onRetryThinking: async () => {
-    try {
-      await settingsController.retryThinking();
-    } catch (err) {
-      flash(err?.message || '读取思考档位失败');
-    }
-  },
-  onNotice: (msg) => flash(msg, { level: 'info' }),
 });
 
-// 启动时先把上次选的字号落到根节点上，不然只有打开设置才会生效
-renderSettings(settingsController.getState());
-
-/** 打开设置：先画本地状态（含字号），再去拉真实模型与思考级别。 */
+/** 打开设置：委托给面板（先关抽屉、画本地状态，再去拉真实模型与思考级别）。 */
 function openSettings() {
-  closeDrawer();
-  settingsView.open();
-  settingsController.setStreaming(Boolean(S.busy));
-  renderSettings(settingsController.getState());
-  const session = S.session;
-  // 会话面板只认会话自己的 Agent；没有会话时才用当前 Agent，
-  // 绝不拿当前 Agent 替别的会话兜底。
-  const sessionAgent = session ? findAgentForSession(session) : null;
-  settingsController.load({
-    sessionPath: session?.path || null,
-    agentId: session ? (session.agentId || null) : (S.currentAgent?.id || null),
-    streaming: Boolean(S.busy),
-    fallbackModel: session ? (sessionAgent?.chatModel || null) : (S.currentAgent?.chatModel || null),
-  });
+  settingsPanel.open();
 }
 
 const transcriptEl = () => $('transcript');
@@ -625,6 +585,8 @@ function resetAfterLogout() {
   clearAllDrafts();
   // 引用里带着上家的消息正文，同样不能跟着进下一次发送。
   quoteBar.clear();
+  // 上家的会话条数基线也不能留着：否则换号回前台会拿别人的条数做差。
+  finishedNotice.reset();
   resetFileRoots();
   streamState.reset();
   if (actionConfirmation && typeof actionConfirmation.cancelAll === 'function') actionConfirmation.cancelAll();
@@ -632,18 +594,15 @@ function resetAfterLogout() {
   if (workspaceView && typeof workspaceView.close === 'function') workspaceView.close();
   // 旧用户的私有历史不能留在 DOM 里等下一次误显。
   transcriptEl().innerHTML = '';
-  // 旧用户在途的目录请求不能回填新登录；reset 只废弃在途结果，控制器仍可用。
-  sessionListController.reset();
+  // 旧用户在途的目录请求不能回填新登录；reset 只废弃在途结果，面板仍可用。
+  // 筛选与新建按钮文案也一起回 Chat（原来是 tabs / label / currentNamespace 三处复位）。
+  sessionPanel.reset();
   S.sessions = [];
-  paintSessions([]);
-  namespaceTabs.setNamespace('home');
-  // 旧用户停在 Code 的话，新登录必须回到 Chat：筛选、新建按钮文案一起复位。
-  currentNamespace = 'home';
-  newSessionLabel.setNamespace('home');
-  closeDrawer();
+  sessionPanel.paint([]);
+  sessionPanel.closeDrawer();
   // 退出登录不能留下盖在登录页上的旧浮层。设置控制器复位但不 dispose，新登录仍可复用。
-  settingsView.close();
-  settingsController.reset();
+  settingsPanel.close();
+  settingsPanel.reset();
   sessionActionsView?.close?.();
   messageActionsMenu?.close?.();
   closeFilePreview();
@@ -679,13 +638,68 @@ function resetAfterLogout() {
 /* ------------------------------------------------------------------ */
 
 async function boot() {
+  // 启动分段计时：冷启动的尾款几乎全在「哪些请求是被 await 串起来的」上，没有这组
+  // 标记只能猜。只在控制台打一行，不进 UI。
+  const bootT0 = performance.now();
+  const bootMarks = [];
+  const mark = (name) => bootMarks.push([name, Math.round(performance.now() - bootT0)]);
+  mark('boot 开始');
   // 登录身份刚确认：上个身份的工作区根缓存不能再给这次用。
   resetFileRoots();
   // 登录身份就绪后才读偏好：接口需要会话，提前读只会拿到 401。
   // 读不到不阻塞启动，界面临时用默认沉静。
   void chatViewMode.load();
-  try { S.boot = await api('/api/mobile/bootstrap'); } catch { S.boot = null; }
+  await loadBootstrap();
+  mark('bootstrap 回来');
+  void features?.get('feed')?.refresh?.();
+  mark('首屏渲染完成');
+  mark('开始拉会话列表');
 
+  await sessionPanel.loadSessions();
+  mark('会话列表回来');
+  // 刚登录/刚启动：此刻看到的列表就是基线，之后回前台做差才有意义。
+  void refreshNoticeBaseline();
+  show('view-list');
+  mark('列表上屏');
+  try { console.log('[boot]', JSON.stringify(bootMarks)); } catch { /* 打不出计时不影响启动 */ }
+  // 启动后主动要一次通知权限（Android 13+）。没壳、已经拒过的会自己安静跳过。
+  void notifications.ensurePermission();
+}
+
+/**
+ * 拉启动配置（Agent 列表 / 署名 / 记忆开关）并上屏。
+ *
+ * 失败不拦启动：没配置也能用会话列表，但错误必须让用户看见——空 Agent 列表配默认署名
+ * 看起来就是「App 坏了」，用户不知道是服务端没回。重试走首页右上角那个现有的「刷新」，
+ * 不另造一个只在出错时出现的按钮。
+ */
+async function loadBootstrap() {
+  let loaded = true;
+  try {
+    S.boot = await api('/api/mobile/bootstrap');
+    // 重试成功要把那条常驻的失败提示收掉：错误提示不自动消失，留着就会出现
+    // 「配置没加载成功」和「配置已重新加载」同屏互搏。
+    if (bootFailToast) {
+      toaster?.dismiss?.(bootFailToast.id);
+      bootFailToast = null;
+    }
+  } catch (err) {
+    S.boot = null;
+    loaded = false;
+    // 详情里带原始 message：`5xx …` 和 `请求超时` 一眼能分出是服务端还是网络。
+    bootFailToast = flash('配置没加载成功，已用默认值启动；点右上角刷新可重试', {
+      detail: String(err?.message || err),
+    });
+    console.warn('[app] bootstrap failed:', err);
+  }
+  // 失败也照样铺一遍：降级启动的界面与改动前一致（空 Agent 列表 + 默认署名），
+  // 只是多了一条看得见的提示。
+  applyBootstrap();
+  return loaded;
+}
+
+/** 把 S.boot 铺到首屏。降级启动时 S.boot 为 null，这里自然落到默认值。 */
+function applyBootstrap() {
   S.agents = Array.isArray(S.boot?.agents) ? S.boot.agents : [];
   const primary = S.agents.find((a) => a.isPrimary) || S.agents[0];
   S.currentAgent = primary || null;
@@ -702,49 +716,29 @@ async function boot() {
   renderModelChip(primary?.chatModel);
   renderAgentCarousel();
   void primeStartupAvatars();
-  // 首页首次选中的助手是直接赋值、不走 selectAgent，轻量刷新入口角标。
-  void casual.refreshBadge();
-  void features?.get('feed')?.refresh?.();
-
-  await loadSessions();
-  show('view-list');
-  // 启动后主动要一次通知权限（Android 13+）。没壳、已经拒过的会自己安静跳过。
-  void notifications.ensurePermission();
+  // 首页首次选中的助手是直接赋值、不走 selectAgent：这里要把数据层的绑定一起补上。
+  // 只刷新角标不够——store 的 agentId 还停在构造时的 null，WS 推来的 casual_* 会被它
+  // 按「不是当前助手」丢掉，而 handleSocketMessage 已经 return true，事件就此消失：
+  // 表现是冷启动后不打开闲聊，未读角标永远不涨。setAgent 会把 client 与 store 一起绑。
+  casual.setAgent();
 }
 
 /* ------------------------------------------------------------------ */
 /* 主页：Agent 横向滑轨与陪伴大屏                                       */
 /* ------------------------------------------------------------------ */
 
+/*
+ * 滑轨与 hero 的 DOM（pill 节点、active、头像/模型/工作区文案）都在 agent-carousel 里；
+ * 这里只做装配：把 S 的当前状态喂进去。pill 点击经模块的 onSelect 回到 selectAgent，
+ * 换助手的业务仍留在本文件。
+ */
 function renderAgentCarousel() {
-  const box = $('agentCarousel');
-  if (!box) return;
-  box.innerHTML = '';
-
-  const agents = S.agents || [];
-  if (!agents.length) {
-    $('companionHero')?.classList.add('no-carousel');
-    return;
-  }
-
-  for (const agent of agents) {
-    const isAct = agent.id === S.currentAgent?.id;
-    const pill = el('button', 'agent-pill' + (isAct ? ' active' : ''));
-    pill.type = 'button';
-
-    const avatarBox = el('span', 'agent-pill-avatar');
-    const agentName = agent.name || agent.agentName || '助手';
-    paintAvatar(avatarBox, { url: agentAvatarUrl(agent), name: agentName });
-    pill.appendChild(avatarBox);
-
-    const nameSpan = el('span', 'agent-pill-name', agentName);
-    pill.appendChild(nameSpan);
-
-    pill.addEventListener('click', () => selectAgent(agent));
-    box.appendChild(pill);
-  }
-
-  updateHeroCompanion();
+  agentCarousel.render({
+    agents: S.agents,
+    currentAgent: S.currentAgent,
+    agentName: S.agentName,
+    homeFolder: S.homeFolder,
+  });
 }
 
 /** 助手切换后的扩展点：闲聊面板与角标都挂在这里，别往 selectAgent 里塞业务。 */
@@ -758,38 +752,19 @@ function selectAgent(agent) {
   S.agentName = agent.name || agent.agentName || 'Hana';
   $('agentName').textContent = S.agentName;
 
-  const box = $('agentCarousel');
-  if (box) {
-    const pills = box.querySelectorAll('.agent-pill');
-    (S.agents || []).forEach((a, i) => {
-      if (pills[i]) pills[i].classList.toggle('active', a.id === agent.id);
-    });
-  }
-
-  updateHeroCompanion();
+  // 轮播 active 与 hero 归模块：这里只喂刚更新的状态，不碰 DOM。
+  agentCarousel.setActive(agent, { agentName: S.agentName, homeFolder: S.homeFolder });
 
   if (typeof onAgentSelected === 'function') onAgentSelected(agent);
 }
 
+/** 陪伴大屏的刷新出口：`__hana.updateHeroCompanion()` 与头像到了之后的补画都走它。 */
 function updateHeroCompanion() {
-  const avatarEl = $('heroAgentAvatar');
-  if (avatarEl) {
-    paintAvatar(avatarEl, {
-      url: agentAvatarUrl(S.currentAgent),
-      name: S.currentAgent?.name || S.agentName,
-      fallback: S.currentAgent?.name || S.agentName,
-    });
-  }
-
-  const modelEl = $('homeModelName');
-  if (modelEl) {
-    modelEl.textContent = modelLabel(S.currentAgent?.chatModel) || 'DeepSeek V4.1';
-  }
-
-  const wsEl = $('homeWorkspaceName');
-  if (wsEl) {
-    wsEl.textContent = S.homeFolder || '工作区';
-  }
+  agentCarousel.updateHero({
+    currentAgent: S.currentAgent,
+    agentName: S.agentName,
+    homeFolder: S.homeFolder,
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -832,7 +807,7 @@ async function sendFromHome() {
     // 用户已经自己导航：草稿留在首页输入框和托盘里，不能被这次流程清掉。
     if (conv.navigationEpoch() !== epoch) return;
 
-    const listed = await loadSessions('home');
+    const listed = await sessionPanel.loadSessions('home');
     if (!Array.isArray(listed)) {
       // 列表失败/被更新的请求顶掉：没有安全落地，首页草稿必须留着。
       if (S.principal === owner && conv.navigationEpoch() === epoch) {
@@ -893,30 +868,6 @@ async function sendFromHome() {
 }
 
 /* ------------------------------------------------------------------ */
-/* 历史会话抽屉交互                                                    */
-/* ------------------------------------------------------------------ */
-
-function openDrawer() {
-  const mask = $('drawerMask');
-  const panel = $('drawerPanel');
-  if (mask) mask.hidden = false;
-  if (panel) {
-    panel.classList.add('open');
-    panel.setAttribute('aria-hidden', 'false');
-  }
-}
-
-function closeDrawer() {
-  const mask = $('drawerMask');
-  const panel = $('drawerPanel');
-  if (mask) mask.hidden = true;
-  if (panel) {
-    panel.classList.remove('open');
-    panel.setAttribute('aria-hidden', 'true');
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /* 头像                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -925,6 +876,20 @@ const { paintAvatar } = createAvatarView({ document });
 /* 头像包：一次请求取回全部头像，省掉「每个头像一次往返」。
  * 取不到不影响任何路径：urlFor 没命中就退回原来的逐张地址。 */
 const avatarPack = createAvatarPack();
+
+/* 首页 Agent 滑轨 + 陪伴大屏。DOM 与 active 状态在模块里，S 仍是唯一状态源：
+ * 选中助手经 onSelect 回到 selectAgent（业务在本文件），按 id 取头像走 avatarUrlFor
+ * （子代理卡片与胶囊也共用这条规则）。 */
+const agentCarousel = createAgentCarousel({
+  document,
+  getElement: $,
+  paintAvatar,
+  agentAvatarUrl,
+  modelLabel,
+  onSelect: selectAgent,
+  packedAvatarUrlOf: (id) => avatarPack.urlFor(id),
+  agentsOf: () => S.agents,
+});
 
 /**
  * 启动时预取头像，到了再把依赖头像的几处重画一遍。
@@ -941,20 +906,12 @@ async function primeStartupAvatars() {
   renderAgentCarousel();
   updateHeroCompanion();
   // 抽屉开着就不要再重画列表：重建行会打断正在看的位置。
-  const drawerOpen = $('drawerPanel')?.classList.contains('open');
-  if (!drawerOpen && Array.isArray(S.sessions) && S.sessions.length) sessionListView.render(S.sessions);
+  if (!sessionPanel.isDrawerOpen() && Array.isArray(S.sessions) && S.sessions.length) sessionListView.render(S.sessions);
 }
 
-/** 按 agent id 拼头像地址；id 不在 bootstrap 列表里就当没有头像，避免一串 404。 */
+/** 按 agent id 拼头像地址；规则（头像包 → agents → 兜底地址）在 agent-carousel 里。 */
 function agentAvatarUrlById(id) {
-  if (!id) return null;
-  const packed = avatarPack.urlFor(id);
-  if (packed) return packed;
-  const agent = (S.agents || []).find((a) => a && (a.id === id || a.agentId === id));
-  if (agent) return agentAvatarUrl(agent);
-  // 子代理池里的成员（寻迹、Luna 这些）不一定出现在首页那排 Agent 里，
-  // 但只要是个真 Agent 就能按 id 取头像；没有头像文件会 404，卡片自己降级成首字。
-  return `/api/agents/${encodeURIComponent(id)}/avatar`;
+  return agentCarousel.avatarUrlFor(id);
 }
 
 /** 用户本人的头像；bootstrap 明确说没有时就直接跳过，不去白撞一次 404。 */
@@ -997,7 +954,7 @@ let sessionModelChipToken = 0;
 
 /**
  * 刷新当前会话模型 chip：
- * 1. 优先调用 settingsController.fetchSessionModel(sessionPath)
+ * 1. 优先调用 settingsPanel.controller.fetchSessionModel(sessionPath)
  * 2. 查不到时退回该会话所属 Agent 的 chatModel（不借用当前 Agent，精确匹配）
  * 3. 都取不到则 hidden = true
  * 4. 退出会话（session 为 null）时恢复成当前 Agent 的默认模型
@@ -1022,7 +979,7 @@ async function syncSessionModelChip(session = S.session) {
   renderModelChip(fallbackModel);
 
   try {
-    const fetched = await settingsController.fetchSessionModel(targetPath);
+    const fetched = await settingsPanel.controller.fetchSessionModel(targetPath);
     // 竞态守卫：代次不一致或用户已经切换到其他会话，晚到结果作废
     if (token !== sessionModelChipToken || !S.session || S.session.path !== targetPath) {
       return;
@@ -1143,62 +1100,111 @@ const sessionListView = createSessionListView({
   onRowAction: (s) => sessionActionsView?.open({ ...s, title: sessionTitle(s) }),
 });
 
-// 统一把 bootstrap 的 homeFolder 作为兜底，避免各处漏传。
-function sessionFolder(s) {
-  return sessionFolderBase(s, S.homeFolder);
-}
-
-// 列表筛选与请求竞态只由 controller 维护；视图、tabs 和 controller 在这里接线。
-const namespaceTabs = createSessionNamespaceTabs({
+// 会话面板：抽屉开合、Chat / Code 筛选、新建按钮文案与列表数据的接线都在模块里。
+// homeFolder 的兜底（sessionFolder）由 homeFolderOf 交给它，与 bootstrap 一致。
+const sessionPanel = createSessionPanel({
   document,
-  onChange: (namespace) => loadSessions(namespace),
-});
-
-// 当前筛选的命名空间：新建按钮的文案与新建行为都要跟着它。
-// （宿主只有 Chat / Code 两模式，Bnt(body) 只认 namespace: 'home' | 'code'）
-const newSessionLabel = createNewSessionLabel({ document });
-let currentNamespace = 'home';
-
-const sessionListController = createSessionListController({
+  getElement: $,
   api,
-  onLoading: () => {
-    sessionListView.showLoading();
-    // 换筛选时先丢掉上一份目录数据，避免请求失败后还留着另一 namespace 的行。
-    S.sessions = [];
+  sessionListView,
+  sessionActionsView,
+  // 打开会话：chip 刷新由 conversation-controller 的 onSessionOpened 统一触发。
+  onOpenSession: (s) => {
+    conv.openSession(s);
   },
-  onLoaded: (list) => {
+  // 长按 / 右键：开会话操作菜单（这里把展示标题算好，菜单模块不认识列表数据）
+  onRowAction: (s) => sessionActionsView?.open({ ...s, title: sessionTitle(s) }),
+  // 列表数据落地：DEBUG 面与搜索缓存都读 S.sessions。
+  onSessionsLoaded: (list) => {
     S.sessions = list;
-    sessionListView.render(list);
-    sessionActionsView?.setList(list);
   },
-  onError: (error) => sessionListView.showError(error),
-  onNamespaceChange: (namespace) => {
-    currentNamespace = namespace;
-    namespaceTabs.setNamespace(namespace);
-    // 列表切到哪个模式，新建按钮就写哪个模式，不留在 Chat。
-    newSessionLabel.setNamespace(namespace);
-  },
+  homeFolderOf: () => S.homeFolder,
 });
 
-namespaceTabs.setNamespace('home');
-newSessionLabel.setNamespace('home');
+// mobile-lifecycle 在 pagehide 时对 controller 与 tabs 各调一次 dispose()：
+// 两样现在都归 session-panel，面板的 dispose 幂等，所以两个槽位共用一个适配对象。
+const sessionPanelDispose = { dispose: () => sessionPanel.dispose() };
 
-// 现有入口的薄适配：不保存筛选、不处理竞态，全部交给 controller。
-function loadSessions(namespace) {
-  return sessionListController.load(namespace);
+/* ------------------------------------------------------------------ */
+/* 回前台「谁跑完了」                                                     */
+/* ------------------------------------------------------------------ */
+
+/** 网关给的会话摘要：只有 id / 标题 / 条数 / 是否在跑。拿不到就安静退。 */
+async function fetchSessionDigest() {
+  let res;
+  try {
+    res = await fetch('/gw/session-digest', { headers: { accept: 'application/json' } });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    const payload = await res.json();
+    return Array.isArray(payload?.sessions) ? payload.sessions : null;
+  } catch {
+    return null;
+  }
 }
 
-// 兼容 DEBUG / 回归入口：仍可单独重绘或取一行。
-function paintSessions(list) {
-  sessionListView.render(list);
+const finishedNotice = createFinishedNotice();
+
+/** 页面现在是不是真的在前台。
+ *
+ * WebView 切到桌面后仍可能报 `visibilityState: 'visible'`（真机见过），
+ * 所以两个信号一起看：hasFocus 为真且不是 hidden 才算在眼前。
+ */
+function pageIsForeground() {
+  try {
+    if (typeof document.hasFocus === 'function' && !document.hasFocus()) return false;
+  } catch {
+    // 老 WebView 没有 hasFocus：退回只看可见性
+  }
+  return document.visibilityState !== 'hidden';
 }
 
-function sessionRow(s) {
-  return sessionListView.row(s);
+/**
+ * 把「现在看到的」记成基线：登录后、每轮生成结束（用户就在屏幕前看着）各做一次，
+ * 这样回前台时做差才只压中「离开期间真的变了」的那几个。
+ *
+ * 后台时一律不拍：真机上 App 切走后 WebView 仍会收事件、跑定时器，
+ * 如果它偷偷把基线推到了「跑完之后」，回前台就再也报不出来了。
+ */
+async function refreshNoticeBaseline() {
+  if (noticeBusy || !pageIsForeground()) return;
+  const sessions = await fetchSessionDigest();
+  if (!sessions) return;
+  // 请求飞出去到回来之间可能已经切到后台了，再确认一次。
+  if (!pageIsForeground()) return;
+  finishedNotice.snapshot(sessions);
 }
 
+/** 回前台那一次做差期间，不许别的路径把基线推走（对账会触发 onSessionIdle）。 */
+let noticeBusy = false;
+
+/** 回前台：拉一次摘要，与基线做差，变了就提示一句。 */
+async function resumeNotice() {
+  noticeBusy = true;
+  try {
+    const sessions = await fetchSessionDigest();
+    if (!sessions) return;
+    const report = finishedNotice.diff(sessions);
+    if (report.total) flash(formatNotice(report), { level: 'info' });
+    finishedNotice.snapshot(sessions);
+  } finally {
+    noticeBusy = false;
+  }
+}
+
+// 兼容 DEBUG / 回归入口：仍可单独重绘或取一行（适配层现在在 session-panel）。
 $('btnRefresh').addEventListener('click', () => {
-  void loadSessions();
+  // 启动时 bootstrap 没拿到：刷新连配置一起重试。不接这一步的话，用户只能重启 App
+  // 才能拿到 Agent 列表与署名，而屏幕上写的是「点刷新可重试」。
+  if (!S.boot) {
+    void loadBootstrap().then((loaded) => {
+      if (loaded) flash('配置已重新加载', { level: 'info' });
+    });
+  }
+  void sessionPanel.loadSessions();
   void features?.get('feed')?.refresh?.();
 });
 $('btnNew').addEventListener('click', () => void startNewSession());
@@ -1224,7 +1230,7 @@ async function startNewSession() {
   // Code 会话必须点名目录。规则定得直白一点：
   // 你就在某个 Code 会话里 → 就地建在同一个仓库（可预测，不每次弹框）；否则就问。
   let cwd = null;
-  if (currentNamespace === 'code') {
+  if (sessionPanel.namespace === 'code') {
     const here = S.session && S.session.namespace === 'code' ? S.session.cwd : null;
     cwd = typeof here === 'string' && here.trim()
       ? here.trim()
@@ -1232,7 +1238,7 @@ async function startNewSession() {
     if (!cwd) return;              // 用户取消就停手，不要退回到猜一个目录
   }
   const level = await hostThinkingLevel();
-  conv.newSession(currentNamespace, { cwd, thinkingLevel: level });
+  conv.newSession(sessionPanel.namespace, { cwd, thinkingLevel: level });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1388,9 +1394,6 @@ async function loadSubagentTranscript(target) {
   return steps;
 }
 
-/* 代码块复制实例。延迟赋值：渲染器先建好，但真正渲染发生在主循环起来之后。 */
-let codeCopy = null;
-
 /* 全屏看图（E12）：懒建，只有真点开图片时才建 DOM。 */
 let imageViewer = null;
 function openImageSet(items, index) {
@@ -1402,19 +1405,51 @@ function openImageSet(items, index) {
   imageViewer.open(items, index);
 }
 
-const renderer = createChatRenderer({
-  state: S,
+/* 生成状态的界面联动只有这一处。
+ * 为什么收成一个函数：busy 有两个来源（渲染器的 onBusyChange、事件路由的 setBusy），
+ * 两边各写一份就会出现「一边置了常亮、另一边不撤」的情况——真机上已经撞过一次：
+ * 生成结束后 KEEP_SCREEN_ON 还挂在窗口上。 */
+/** 上一次真正应用过的生成状态：只为调试日志与「原生报文去重」留着。
+ *
+ * 注意：**不能拿它拦住界面更新**。事件流里 busy 会重复上报（一次生成几十条），
+ * 确实需要拦的是往原生壳发的报文；而 composer / settings 的 setBusy 本身幂等，
+ * 多调几次没有代价。真机上撞过反例：夹具或外部代码直接改 S.busy 时，
+ * 这里一旦提前 return，按钮就停在旧文案上——断线点「停止」会变成发消息。
+ * （拦 UI 的版本让 tests/abort_pending 的第三个用例失败，已修。）
+ */
+let lastBusyApplied = null;
+/** 上一次发给原生壳的常亮状态：这层才是真正需要去重的地方。 */
+let lastScreenOnApplied = null;
+
+function applyBusyUi(busy) {
+  const on = Boolean(busy);
+  if (DEBUG && on !== lastBusyApplied) console.info('[busy]', on);
+  lastBusyApplied = on;
+  composer.setBusy(on);
+  settingsPanel.controller.setStreaming(on);
+  // 生成中屏幕不要熄：长任务锁屏后 WebView 被冻结，回来还得靠对账补。
+  // 桥不可用（桌面浏览器）时这里就是个空调用。
+  // 重复的 busy 不上报（一次生成能收到几十条），只拦这一层。
+  if (on === lastScreenOnApplied) return;
+  lastScreenOnApplied = on;
+  void nativeBridge.setKeepScreenOn?.(on);
+}
+
+/* 聊天区装配：渲染器、代码块复制、搜索定位、等首屏都在 chat-panel 里。
+ * 这里只交出宿主侧的东西——两个状态袋子、头像、busy 联动、看图、翻页、历史容器；
+ * 子代理回放顺手把「历史里仍在跑」的条目回灌给胶囊，跨模块，所以适配体留在这边。 */
+const chatPanel = createChatPanel({
+  document,
   getElement: $,
-  getHistoryView: () => conv.historyView,
+  rendererState,
+  // 会话 / 身份 / 署名这些应用级字段还是从 S 读：渲染器自己那份只管「画到哪了」。
+  appState: S,
   cardController,
   fileUrls,
-  paintAvatar,
-  agentAvatarUrlById,
-  userAvatarUrl,
+  avatars: { paint: paintAvatar, agentUrlById: agentAvatarUrlById, userUrl: userAvatarUrl },
   flash,
   onBusyChange: (busy) => {
-    composer.setBusy(busy);
-    settingsController.setStreaming(Boolean(busy));
+    applyBusyUi(busy);
   },
   // 摘要文案由 turn-summary 提供；渲染器只负责画，不反向依赖视图模式模块。
   formatSereneSummary: sereneSummary,
@@ -1429,34 +1464,35 @@ const renderer = createChatRenderer({
     }
     return drawn;
   },
-  // 每次有新内容上屏（含流式重绘）后补一次代码块复制按钮。
-  // 代码块是 `innerHTML = renderMarkdown(...)` 重画出来的，只在挂载时同步一次不够。
-  onBlocksRendered: (node) => {
-    if (codeCopy) codeCopy.sync(node);
-  },
   // 全屏看图交给 lightbox 模块；渲染器只负责算出「哪几张图、点的是第几张」。
   openImageViewer: (items, index) => openImageSet(items, index),
+  // 复制实现由这边注入：code-copy 与 chat-panel 都不 import message-actions。
+  copyText: copyTextToClipboard,
+  loadOlder: () => conv.loadOlderPage(),
+  getHistoryView: () => conv.historyView,
 });
 
-/* 代码块复制（E11）：按钮靠事件委托，节点渲染后补一次即可。
- * 复制实现由这里注入，模块自己不 import 另一个模块。 */
-codeCopy = installCodeCopy({ root: transcriptEl(), copy: copyTextToClipboard });
+const renderer = chatPanel.renderer;
+const searchJump = chatPanel.searchJump;
+/* 名字保持原样：搜索那次「打开会话 → 等首屏 → 定位」的时序靠它，改动只在这里收成引用。 */
+const waitForTranscript = chatPanel.waitForTranscript;
 
 // 模式一变就重画摘要；首屏再补一次，避免「设置说沉静、界面还是默认」的静默不一致。
 applyViewMode = (mode) => {
-  renderer.setViewMode(mode);
+  // 渲染器那半（摘要怎么画）归 chat-panel，这里不再直接碰 renderer.setViewMode
+  chatPanel.setViewMode(mode);
   // 详情页跟同一个设置走：沉静下思考只留一行，点开才铺全文
   subagentSheet?.setViewMode?.(mode);
 };
-renderer.setViewMode(chatViewMode.current());
+chatPanel.setViewMode(chatViewMode.current());
 subagentSheet?.setViewMode?.(chatViewMode.current());
 
 /* ------------------------------------------------------------------ */
 /* WebSocket                                                           */
 /* ------------------------------------------------------------------ */
 
-// 连接代次 / 重连定时器 / 断线时排队的 abort 全在 websocket-client 里；
-// 这里只把状态对象、DOM 反馈和业务回调接进去。
+// 连接代次 / 重连定时器在 websocket-client 里，断线时排队的 abort 在 abort-queue 里；
+// 这里只把状态对象、那个队列、DOM 反馈和业务回调接进去。
 /* 闲聊特性实例。它在下面才构造，但 WS 回调可能先于装配完成被调到，
  * 所以用可空引用而不是闭包常量（常量在 TDZ 里取值会抛）。 */
 let casual = null;
@@ -1477,16 +1513,20 @@ function paintConnectionStatus(status) {
 
 const sockets = createWebsocketClient({
   state: S,
+  abortQueue,
   getLocation: () => location,
   // 闲聊面板可以脱离会话单独打开；面板开着也算「有活干」，否则纯闲聊场景永远不会重连。
   shouldReconnect: () => Boolean(S.session) || Boolean(casual && casual.isOpen()),
   getResumeFields: () => streamState.resumeFields(),
-  makeAbortFrame: (pending) => ({
-    type: 'abort',
-    ...(S.session?.sessionId ? { sessionId: S.session.sessionId } : {}),
-    sessionPath: pending.sessionPath,
-    ...(pending.streamId ? { streamId: pending.streamId } : {}),
-  }),
+  makeAbortFrame: (pending) => {
+    if (!pending) return null;   // 队列空时不该走到这里；给个空帧比抛异常好排查
+    return {
+      type: 'abort',
+      ...(S.session?.sessionId ? { sessionId: S.session.sessionId } : {}),
+      sessionPath: pending.sessionPath,
+      ...(pending.streamId ? { streamId: pending.streamId } : {}),
+    };
+  },
   debug: debugLog,
   // 状态回调只用来画细条；重连语义、退避参数、事件顺序都不归它管。
   onStatusChange(status) {
@@ -1507,6 +1547,16 @@ const sockets = createWebsocketClient({
   onError() {
     // 只是报错，不一定断线：不碰按钮可用性（等 close 再说）。
     $('connDot').className = 'dot off';
+  },
+  onUnavailable(reason, error) {
+    // 这不是断线：重连没用，所以要有一句能行动的话，而不是那条「正在重连」的细条。
+    $('connDot').className = 'dot off';
+    flash(
+      reason === 'unsupported'
+        ? '当前应用内核没有 WebSocket，连不上 Hana；请更新系统 WebView 后重开'
+        : '连接建立失败：' + (error?.message || '未知错误'),
+      { detail: error ? String(error.stack || error) : '' },
+    );
   },
   onMessage(data) {
     // 只记类型，不记内容：排查「有没有收到」时够用。
@@ -1539,6 +1589,33 @@ const notifications = createNotifications({
   // 壳自己也会在 onResume+有焦点时再拦一道。
   isForeground: () => document.visibilityState !== 'hidden' && document.hasFocus(),
   agentName: () => S.agentName || S.currentAgent?.name || 'Hana',
+});
+
+/* 系统分享进来的文字：只放进草稿，不自动发送。
+ * 手机上的真实场景是「看到一段东西 → 分享 → 小鲸鱼」，人往往还没想好要问什么，
+ * 自动发送等于替用户做决定，所以这里只负责把字送到他手边。 */
+nativeBridge.onShare(({ text, title } = {}) => {
+  const value = typeof text === 'string' ? text.trim() : '';
+  if (!value) return;
+  const chatVisible = $('view-chat') && !$('view-chat').hidden;
+  if (chatVisible && S.session) {
+    composer.setText(value);
+  } else {
+    // 首页的 id 是 view-list（不是 view-home）：show() 只认 view-login / view-list / view-chat，
+    // 传错一个名字会把三个视图全藏起来，屏幕就白成一片。
+    show('view-list');
+    const home = $('homeInput');
+    if (home) {
+      home.value = value;
+      try {
+        home.dispatchEvent(new Event('input', { bubbles: true }));
+        home.focus();
+      } catch {
+        // 值已经写进去了，事件派发不了不影响使用
+      }
+    }
+  }
+  flash(title ? `已收到分享：${title}` : '已收到分享内容，确认后发送', { level: 'info' });
 });
 
 /* 真机排障出口：只读、不含内容与凭据。
@@ -1606,9 +1683,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') catchUpAfterResume();
 });
 
-/** 等 WebSocket 就绪；超时返回 false。 */
-function waitForWs(timeoutMs = 4000) {
-  return sockets.waitForReady(timeoutMs);
+/** 等 WebSocket 就绪；超时返回 false。取消条件（切会话）由发送方给。 */
+function waitForWs(timeoutMs = 4000, shouldCancel) {
+  return sockets.waitForReady(timeoutMs, shouldCancel);
 }
 function connectWS() {
   sockets.connect();
@@ -1631,14 +1708,17 @@ const router = createEventRouter({
   sockets,
   cardBridge,
   streamState,
+  // 与 composer 同一份「刚发出去的那条」：回显靠它去重。
+  echoGuard,
   flash,
   setBusy: (busy) => {
-    composer.setBusy(busy);
-    settingsController.setStreaming(Boolean(busy));
+    applyBusyUi(busy);
   },
-  loadSessions: () => loadSessions(),
+  loadSessions: () => sessionPanel.loadSessions(),
   loadHistory: () => conv.loadHistory(),
   chatSubtitle: (folder) => conv.chatSubtitle(folder),
+  // context_usage 的数字存在副标题的家里：路由只转达，不自己留一份。
+  setContextPercent: (pct) => conv.setContextPercent(pct),
   // 子代理的实时状态走 block_update / content_block，同样注入，不 import。
   handleSubagentEvent: (ev) => {
     const handled = subagentView.handleEvent(ev);
@@ -1652,7 +1732,11 @@ const router = createEventRouter({
     notifications.onTurnEnd(info);
   },
   // 宿主确认当前会话已空闲（整轮收尾，或没有活动轮但运行态已停）：对齐一次历史。
-  onSessionIdle: () => scheduleHistorySync(),
+  onSessionIdle: () => {
+    scheduleHistorySync();
+    // 用户就在屏幕前看着这一轮跑完：把基线推到最新，回前台时才不会把自己看过的报成新回复。
+    void refreshNoticeBaseline();
+  },
   // 前台恢复对账：窗口到期（这段时间一条事件都没来）且仍在生成时，放行一次历史补拉。
   // 判断全在 conversation-controller：拿回来的历史如果比屏上这一轮更完整，才走整轮收尾；
   // 否则只合并不收尾。activityToken 用来在取历史期间再确认一次「真的没有再新事件」。
@@ -1661,7 +1745,14 @@ const router = createEventRouter({
       // 事件计数也交给控制器：同一批事件下重复对账不重复打上游。
       activityToken,
       isStillQuiet: () => router.activityCount() === activityToken,
-      onRecovered: () => router.completeIdleReconcile(activityToken),
+      onRecovered: () => {
+        router.completeIdleReconcile(activityToken);
+        // 对账真的拿回了更完整的一轮，就说明「锁屏期间跑完了」。
+        // 这里是唯一可靠的信号：会话列表里的时间戳只跟用户发消息走，
+        // 助手跑完不一定会动它（真机验过）。
+        const title = S.session?.title;
+        flash(title ? `「${title}」有新回复` : '有新回复', { level: 'info' });
+      },
     });
   },
   // 全局日报广播在 event-router 的会话归属过滤前转发。
@@ -1776,12 +1867,17 @@ const composer = createComposer({
   getElement: $,
   renderer,
   sockets,
+  abortQueue,
   streamState,
+  // 与 event-router 同一份「刚发出去的那条」。
+  echoGuard,
   flash,
   waitForReady: waitForWs,
   autoGrow,
   onDraftCleared: () => {
     clearDraftFor();
+    // 发成功了：下一条历史请求要绕过网关快照，不然刚发的那条会被旧快照盖掉。
+    conv?.markTailDirty?.();
   },
   // 引用只在「发送成功」时按发起时的版本消费：等待期间改稿不影响它，
   // 等待期间改选的新引用也不会被这次发送误清（见 quote-bar 的 getVersion/consume）。
@@ -1871,10 +1967,10 @@ const conv = createConversationController({
   workspaceView,
   closeFilePreview: () => closeFilePreview(),
   show,
-  loadSessions: (ns) => loadSessions(ns),
+  loadSessions: (ns) => sessionPanel.loadSessions(ns),
   flash,
-  sessionFolder,
-  closeDrawer,
+  sessionFolder: (s) => sessionPanel.sessionFolder(s),
+  closeDrawer: () => sessionPanel.closeDrawer(),
   // 所有真实导航（新建 / 列表打开 / 首页发送打开）都从这里拿统一通知，
   // 模型 chip 跟着会话立即刷新，不在每个入口各写一遍。
   onSessionOpened: (session) => {
@@ -1894,6 +1990,8 @@ const conv = createConversationController({
     // 只清胶囊：同一会话里的整页替换不该忘掉 taskId 的终态；换会话走 clear()
     subagentBar.clearChips?.();
   },
+  // 发完消息 → 回列表 → 再点进来：那一页可能停在发送之前，气泡会随清屏一起没。
+  pendingLocalSend: () => echoGuard.lastLocalUser,
 });
 
 /* ------------------------------------------------------------------ */
@@ -1910,7 +2008,7 @@ featureRegistry.register({
     const feature = createSearchFeature({
       getElement: $,
       api,
-      getNamespace: () => currentNamespace,
+      getNamespace: () => sessionPanel.namespace,
       openSession: (session) => {
         const norm = (p) => (typeof p === 'string' ? p.trim().replace(/\\/g, '/').toLowerCase() : '');
         const targetPath = norm(session?.path);
@@ -1927,7 +2025,19 @@ featureRegistry.register({
           workspaceLabel: session?.workspaceLabel || cached?.workspaceLabel || null,
           namespace: session?.namespace || cached?.namespace || 'home',
         };
-        void conv.openSession(merged);
+        // 搜索过来的：打开之后按文字定位。原词、snippet、命中类型、会话总条数一并交给模块，
+        // 它自己决定试哪些锚点、翻几页、找不到时退到哪里；上限、超时、取消也都在模块里，
+        // 这里只负责传参、收起上一次、把提示接给 flash。
+        searchJump.cancel();
+        const opened = conv.openSession(merged);
+        if (merged.locateQuery) {
+          void opened.then(waitForTranscript).then(() => searchJump.locate({
+            query: merged.locateQuery,
+            snippet: merged.locateSnippet,
+            matchKind: merged.locateMatchKind,
+            messageCount: merged.messageCount,
+          }));
+        }
       },
       document,
     });
@@ -1975,7 +2085,7 @@ featureRegistry.register({
       api,
       flash,
       // 还原后活跃列表要重新拉：会话文件从 archived/ 移回来了，本地列表不会自己知道。
-      onRestored: () => { void loadSessions(); },
+      onRestored: () => { void sessionPanel.loadSessions(); },
       document,
     });
     feature.mount();
@@ -1990,7 +2100,9 @@ featureRegistry.register({
   dependsOn: ['search'],
   register: (ctx) => {
     const feature = createCasualFeature({
-      state: S,
+      // currentAgent 是登录后由 boot() 补上的（见 S.currentAgent 的赋值），S 的字面量里没有
+      // 这一项，而特性那边要求必填。这里只补类型，不动 S 的运行期形状。
+      state: /** @type {typeof S & {currentAgent: object|null}} */ (S),
       getElement: $,
       api,
       flash,
@@ -2016,7 +2128,8 @@ $('homeInput')?.addEventListener('keydown', (e) => {
   e.preventDefault();
   sendFromHome();
 });
-$('btnOpenDrawer')?.addEventListener('click', openDrawer);
+// 抽屉的三个开关（btnOpenDrawer / btnPeekRecent / btnCloseDrawer）与 drawerMask 的点击
+// 都在 session-panel 里一起建、一起 dispose；这里不再重复接线。
 // 接入方式：壳里拦截 hana-setup:// 弹原生对话框（本页与壳同源、且是用户手势才会被受理）。
 // 侧边栏一个，登录页一个——登录页还没有侧边栏可点。
 const openServerMode = () => { location.href = 'hana-setup://edit-url'; };
@@ -2032,9 +2145,6 @@ footSettings?.addEventListener('keydown', (e) => {
 $('btnHomeThinking')?.addEventListener('click', openSettings);
 $('homeModelChip')?.addEventListener('click', openSettings);
 $('btnLoginServerMode')?.addEventListener('click', openServerMode);
-$('btnPeekRecent')?.addEventListener('click', openDrawer);
-$('btnCloseDrawer')?.addEventListener('click', closeDrawer);
-$('drawerMask')?.addEventListener('click', closeDrawer);
 
 $('btnBack').addEventListener('click', () => {
   const feedFeature = features?.get?.('feed');
@@ -2054,8 +2164,8 @@ window.HanaMobile = Object.freeze({
     // 只保存、不拦截：现在草稿不会丢，没必要为它多弹一次确认框。
     flushDraftNow();
     if (composer.back()) return true;
-    if (typeof settingsView.isOpen === 'function' && settingsView.isOpen()) {
-      settingsView.close();
+    if (typeof settingsPanel.isOpen === 'function' && settingsPanel.isOpen()) {
+      settingsPanel.close();
       return true;
     }
     const archiveFeature = features?.get?.('archive');
@@ -2112,6 +2222,9 @@ $('btnDebugClose')?.addEventListener('click', () => { $('debug').hidden = true; 
 // 首页工作区入口
 $('homeWorkspaceChip')?.addEventListener('click', async () => {
   const agentId = S.currentAgent?.id;
+  // listRoots() 返回的是 { ok, studioId, workspaces }（也兼容老后端直接给数组），
+  // 两种形状下面都要接，所以这里按 any 记；展开前用 Array.isArray 逐个判。
+  /** @type {any} */
   let roots = [];
   try {
     roots = await workspaceService.listRoots();
@@ -2137,6 +2250,8 @@ $('btnWorkspace')?.addEventListener('click', async () => {
     flash('无法确认当前会话所属智能体，请回首页选择工作区');
     return;
   }
+  // 同首页入口：listRoots() 给的是 { workspaces: [...] }，老后端也可能是数组。
+  /** @type {any} */
   let roots = [];
   try {
     roots = await workspaceService.listRoots();
@@ -2169,21 +2284,31 @@ function debugLog(dir, obj) {
 /* ------------------------------------------------------------------ */
 
 /* 窗口与页面生命周期：键盘/视口、前后台切换、pagehide、错误兜底都在 mobile-lifecycle。 */
+
 const lifecycle = createMobileLifecycle({
   state: S,
   document,
   window,
   getElement: $,
   renderer,
-  sockets,
   connectWS,
   // 回到前台的那一次重连之后开一个对账窗口（窗口时长在 event-router 的常量里，2s）；
   // 进后台/失焦/卸载时把窗口一起作废。正常前台使用、切会话、发送消息都不会开窗。
-  onForegroundResume: () => { router.beginIdleReconcile(); },
-  onForegroundSuspend: () => { router.cancelIdleReconcile(); },
+  onForegroundResume: () => {
+    router.beginIdleReconcile();
+    // 壳会在 onPause 无条件清掉常亮，回到前台时如果还在生成得自己再要一次。
+    void nativeBridge.setKeepScreenOn?.(Boolean(S.busy));
+    // 离开期间跑完的会话：问一次摘要做差，提示一句。
+    void resumeNotice();
+  },
+  onForegroundSuspend: () => {
+    router.cancelIdleReconcile();
+  },
   actionConfirmation,
-  sessionListController,
-  namespaceTabs,
+  // mobile-lifecycle 只在这两个槽位上调 dispose()：把四个抽屉监听、目录控制器与
+  // Chat / Code 标签一起收干净。面板的 dispose 幂等，两个槽位共用一个适配对象。
+  sessionListController: sessionPanelDispose,
+  namespaceTabs: sessionPanelDispose,
   probeBuild: LAYOUT_PROBE_BUILD,
   // 真机取证要知道「跑的是哪个入口脚本」，所以把 app 自己的 URL 报进去。
   probeModuleUrl: import.meta.url,
@@ -2206,21 +2331,22 @@ const lifecycle = createMobileLifecycle({
         appendSystem: renderer.appendSystem, startAssistantTurn: renderer.startAssistantTurn,
         finishTurn: renderer.finishTurn, mediaGrid: renderer.mediaGrid,
         openLightbox: renderer.openLightbox, addFiles: composer.addFiles,
-        paintSessions, sessionRow, S, sendMessage: composer.sendMessage,
+        paintSessions: (list) => sessionPanel.paint(list),
+        sessionRow: (s) => sessionPanel.row(s), S, sendMessage: composer.sendMessage,
         updateHeroCompanion, api, handleEvent, openSession: conv.openSession, streamState,
         ensureAuth, actionConfirmation, workspaceView, workspaceService,
         cardBridge, cardController, getActiveContext, flash,
         // 修复回归用的入口：都是本模块里本来就有的函数，不是为测试新开的分支。
         abortTurn: composer.abortTurn, connectWS, newSession: conv.newSession,
-        sendFromHome, loadHistory: conv.loadHistory,
+        sendFromHome, loadHistory: conv.loadHistory, loadOlderPage: conv.loadOlderPage,
         renderAttachBar: composer.renderAttachBar, clearAttach: composer.clearAttach,
         fileHrefFor, ensureFileRoots, resetFileRoots,
         fileUrls,
         isSendEnter: composer.isSendEnter, nearBottom: renderer.nearBottom,
         backToList: conv.backToList,
-        renderer, composer,
-        settingsView, messageActionsMenu, sessionActionsView,
-        settingsController, loginController,
+        renderer, rendererState, composer,
+        settingsView: settingsPanel.view, messageActionsMenu, sessionActionsView,
+        settingsController: settingsPanel.controller, loginController,
         sessionActions,
         casual, features, selectAgent,
         resetAfterLogout,

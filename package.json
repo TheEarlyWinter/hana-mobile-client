@@ -1,18 +1,24 @@
 {
   "name": "hana-mobile",
-  "version": "0.1.0",
+  "version": "0.9.10",
   "private": true,
   "type": "module",
   "description": "Hana 移动端前端 + 本机同源网关 + Android 壳",
   "scripts": {
     "build": "node scripts/build-web.mjs",
     "build:watch": "node scripts/build-web.mjs --watch",
-    "test": "node scripts/run-all-tests.mjs"
+    "test": "node scripts/run-all-tests.mjs",
+    "typecheck": "tsc -p jsconfig.json",
+    "typecheck:gate": "node scripts/typecheck-gate.mjs",
+    "typecheck:update": "node scripts/typecheck-gate.mjs --update",
+    "version:set": "node scripts/version.mjs set"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "pdfjs-dist": "3.11.174"
+    "pdfjs-dist": "3.11.174",
+    "sharp": "^0.35.5"
   }
 }

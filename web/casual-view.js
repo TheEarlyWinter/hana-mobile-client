@@ -5,7 +5,10 @@
  *
  * 契约：
  *   createCasualView({ document, onSend, onLoadEarlier, onMarkRead, onOpenStickers, onRetry, onClose })
- *   -> { setState, open, close, isOpen, destroy, scrollToLatest }
+ *   -> { setState, open, close, reset, isOpen, destroy, scrollToLatest }
+ *
+ * onMarkRead 可以返回 Promise<boolean>：View 等结果再记账，失败（false / reject）不记账，
+ * 下一次状态更新会重试。返回 undefined 的同步实现按老语义「调用即记账」。
  */
 
 import { createScrollPin } from './scroll-pin.js';
@@ -97,7 +100,7 @@ function formatFileSize(bytes) {
  * @param {Document} [options.document]
  * @param {(text: string) => void} [options.onSend]
  * @param {() => void} [options.onLoadEarlier]
- * @param {(entryId: string|number) => void} [options.onMarkRead]
+ * @param {(entryId: string|number) => (void|boolean|Promise<boolean>)} [options.onMarkRead]
  * @param {() => void} [options.onOpenStickers]
  * @param {(clientMessageId: string|number) => void} [options.onRetry]
  * @param {() => void} [options.onClose]
@@ -130,7 +133,12 @@ export function createCasualView({
     stylePackId: null,
   };
 
+  // 已确认上报成功的条目 id。失败不记，否则一次网络抖动就把这条永久挡住（store 还能重试）。
   const _markedReadIds = new Set();
+  // 正在上报中的条目 id：状态更新可能连着来几次，同一条不要并发发请求。
+  const _markReadInFlight = new Set();
+  // 上报代次：reset / 换 Agent 时推进，旧请求回来不许把上一段会话的 id 记回来。
+  let _readGen = 0;
   let _lastLoadEarlierTime = 0;
 
   /* ---------------------------- 构建 DOM 树 ---------------------------- */
@@ -191,6 +199,12 @@ export function createCasualView({
     skeletonEl.appendChild(sRow);
   }
 
+  // 空态：加载完了但一条消息都没有时给一句话，别让用户对着一片白。
+  const emptyEl = document.createElement('div');
+  emptyEl.className = 'casual-empty';
+  emptyEl.hidden = true;
+  emptyEl.textContent = '还没有消息';
+
   // 消息列表实体
   const listEl = document.createElement('div');
   listEl.className = 'casual-list';
@@ -217,6 +231,7 @@ export function createCasualView({
 
   messagesWrap.appendChild(loadingEarlierEl);
   messagesWrap.appendChild(skeletonEl);
+  messagesWrap.appendChild(emptyEl);
   messagesWrap.appendChild(listEl);
   messagesWrap.appendChild(typingEl);
 
@@ -314,10 +329,31 @@ export function createCasualView({
     const firstUnreadEntry = entries[firstUnreadIndex];
     if (!firstUnreadEntry || firstUnreadEntry.id === undefined) return;
 
-    if (!_markedReadIds.has(firstUnreadEntry.id)) {
-      _markedReadIds.add(firstUnreadEntry.id);
-      onMarkRead?.(firstUnreadEntry.id);
+    const entryId = firstUnreadEntry.id;
+    if (_markedReadIds.has(entryId) || _markReadInFlight.has(entryId)) return;
+
+    // 记账必须等结果：以前是先记账再调用，失败一次这个 id 就永久作废，
+    // 而 store 的失败分支本来是会重试的。现在只有确认成功才记；回调没返回
+    // Promise 时（同步实现）保持老语义，避免把同步调用方变成每次都重发。
+    const result = onMarkRead?.(entryId);
+    if (!result || typeof result !== 'object' || typeof result.then !== 'function') {
+      _markedReadIds.add(entryId);
+      return;
     }
+
+    const generation = _readGen;
+    _markReadInFlight.add(entryId);
+    Promise.resolve(result).then(
+      (ok) => {
+        _markReadInFlight.delete(entryId);
+        if (generation !== _readGen) return; // 期间 reset 过，别把旧上下文的 id 记回来
+        if (ok === false) return; // 没上报成功：下一次 setState / 滚动会再试
+        _markedReadIds.add(entryId);
+      },
+      () => {
+        _markReadInFlight.delete(entryId);
+      },
+    );
   }
 
   /* ---------------------------- 渲染逻辑 ---------------------------- */
@@ -325,7 +361,7 @@ export function createCasualView({
   /**
    * 渲染单个消息气泡内部的内容（严格防注入，采用 textContent）
    * @param {object} item
-   * @returns {{ element: HTMLElement, transparentBubble?: boolean }}
+   * @returns {{ element: HTMLElement, transparentBubble?: boolean, isSystem?: boolean }}
    */
   function renderItemContent(item) {
     const kind = item?.kind;
@@ -472,6 +508,10 @@ export function createCasualView({
       skeletonEl.hidden = true;
       listEl.hidden = false;
     }
+
+    // 空态只在「不在加载、且确实没有条目」时露脸：骨架屏一收就是一片白，
+    // 用户分不清「没有消息」和「没加载出来」。
+    emptyEl.hidden = hasEntries || _state.loading === true;
 
     loadingEarlierEl.hidden = !_state.loadingEarlier;
 
@@ -685,6 +725,23 @@ export function createCasualView({
     root.hidden = true;
   }
 
+  /** 清空输入框草稿：换 Agent / 登出时不能把旧草稿带给新对象。 */
+  function clearDraft() {
+    inputEl.value = '';
+  }
+
+  /**
+   * 清掉只属于「这一段会话」的本地记账：草稿、已读去重、加载更早的节流。
+   * 旧条目的 id 一律作废，新对象/新登录从头开始。
+   */
+  function reset() {
+    _readGen += 1;
+    _markedReadIds.clear();
+    _markReadInFlight.clear();
+    _lastLoadEarlierTime = 0;
+    clearDraft();
+  }
+
   function isOpen() {
     return _isOpen;
   }
@@ -702,6 +759,8 @@ export function createCasualView({
     setState,
     open,
     close,
+    reset,
+    clearDraft,
     isOpen,
     destroy,
     scrollToLatest,

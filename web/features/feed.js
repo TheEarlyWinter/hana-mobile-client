@@ -17,17 +17,17 @@ function eventId() {
 }
 
 /**
- * @param {object} deps
- * @param {(path:string, init?:object)=>Promise<any>} deps.api
+ * @param {object} [deps]
+ * @param {(path:string, init?:object)=>Promise<any>} [deps.api]
  * @param {Document} [deps.document]
  * @param {Window} [deps.window]
- * @param {()=>object|null} deps.getIdentity
- * @param {()=>number} deps.getNavigationEpoch
- * @param {()=>object|null} deps.getSession
- * @param {(session:object)=>Promise<void>} deps.openSession
- * @param {(input:{text:string,feed:object,isCurrent:()=>boolean})=>Promise<object>} deps.sendPrepared
+ * @param {()=>object|null} [deps.getIdentity]
+ * @param {()=>number} [deps.getNavigationEpoch]
+ * @param {()=>object|null} [deps.getSession]
+ * @param {(session:object)=>Promise<void>} [deps.openSession]
+ * @param {(input:{text:string,feed:object,isCurrent:()=>boolean})=>Promise<object>} [deps.sendPrepared]
  * @param {(message:string)=>void} [deps.toast]
- * @param {typeof IntersectionObserver} [deps.IntersectionObserver]
+ * @param {typeof globalThis.IntersectionObserver} [deps.IntersectionObserver]
  */
 export function createFeedFeature({
   api,

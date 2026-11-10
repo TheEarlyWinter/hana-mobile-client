@@ -26,14 +26,18 @@ import {
   OWNER_SESSION_CREATE_PATH,
 } from './security-policy.mjs';
 import { isEligibleOwnerPrincipal, isOwnerPrincipalCandidate, loadLocalOwner } from './local-owner.mjs';
-import { checkReadAuth, denyRead } from './upstream-access.mjs';
-import { createAvatarPack, isAvatarPackPath } from './avatar-pack.mjs';
+import { checkReadAuth, denyRead, upstreamHeaders } from './upstream-access.mjs';
+import { createAvatarPack, isAvatarPackPath, upstreamPathForAvatarId } from './avatar-pack.mjs';
+import { createAvatarCache } from './avatar-cache.mjs';
+import { createSessionDigest, SESSION_DIGEST_PATH } from './session-digest.mjs';
 import { CARD_RUNTIME_PATH, denyCardRuntime, serveCard, serveSharedCardRuntime } from './card-host.mjs';
 import { serveFeedCard } from './feed-card-host.mjs';
 import { serveSessionFile } from './session-files.mjs';
 import { serveStatic } from './static-files.mjs';
 import { createWebsocketProxy } from './websocket-proxy.mjs';
 import { createHttpProxy } from './http-proxy.mjs';
+import { createTailCache } from './tail-cache.mjs';
+import { createTailServe } from './tail-serve.mjs';
 import { createLogger } from './logger.mjs';
 import {
   ALLOWED_ORIGINS,
@@ -46,10 +50,10 @@ import {
   LOG_KEEP_FILES,
   LOG_MAX_BYTES,
   LOG_WS,
+  LOG_WS_BODY,
   TLS_OPTIONS,
   UPSTREAM,
   WEB_ROOT,
-  WS_LOG,
   startupError,
 } from './config.mjs';
 
@@ -57,6 +61,20 @@ import {
 const logger = LOG_ENABLED
   ? createLogger({ dir: LOG_DIR, maxBytes: LOG_MAX_BYTES, keepFiles: LOG_KEEP_FILES })
   : null;
+
+/**
+ * WS 帧日志（HANA_GW_LOG_WS=1）单独一条流（`ws-frames-*.jsonl`）：帧量比请求量大几个数量级，
+ * 混进主日志会把请求记录挤出保留窗口。轮转参数与主日志共用一套。
+ */
+const wsFrameLogger =
+  LOG_ENABLED && LOG_WS
+    ? createLogger({
+        dir: LOG_DIR,
+        prefix: 'ws-frames',
+        maxBytes: LOG_MAX_BYTES,
+        keepFiles: LOG_KEEP_FILES,
+      })
+    : null;
 
 /** req.url 带着 query，路由判断只看 pathname —— `/api?x=1`、`/api?` 也得走反代。 */
 function pathnameOf(rawUrl) {
@@ -108,10 +126,165 @@ function denyEncodedPath(res) {
 
 /* HTTP 反向代理（含强制下载、hop-by-hop 清理）已拆到 http-proxy.mjs。 */
 
-const { proxyHttp } = createHttpProxy({ isApiPath });
+/**
+ * 会话尾部快照：手机打开长会话时上游要 3 秒多才拼出 50 条，网关先把上一份直接发出去。
+ * 关掉的方式只有一个环境变量，方便排障时确认「是不是缓存在捣鬼」。
+ */
+const tailCacheEnabled = process.env.HANA_GW_TAIL_CACHE !== 'off';
+/** 两个窗口可调：排障时把 fresh 调成 0 就能验证「每次都走上游」是不是就正常了。 */
+function envMs(name, fallback) {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw >= 0 ? raw : fallback;
+}
+const tailCache = tailCacheEnabled
+  ? createTailCache({
+    freshMs: envMs('HANA_GW_TAIL_FRESH_MS', undefined),
+    maxStaleMs: envMs('HANA_GW_TAIL_STALE_MS', undefined),
+  })
+  : null;
+const tailServe = tailCache
+  ? createTailServe({
+    cache: tailCache,
+    log: (line) => {
+      if (typeof logger?.log === 'function') logger.log({ level: 'warn', msg: line });
+      else console.warn(line);
+    },
+  })
+  : null;
+
+const { proxyHttp } = createHttpProxy({
+  isApiPath,
+  // 只给「会话尾部」这一条留响应体；别的路径连回调都不进。
+  shouldCollectBody: tailServe
+    ? (req, status, headers) => {
+      if (status !== 200) return false;
+      const type = String(headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+      return type === 'application/json' && tailServe.keyFor(req) !== null;
+    }
+    : null,
+  onResponseBody: tailServe
+    ? (req, res, status, headers, body) => {
+      if (!body) return;
+      tailServe.capture(req, res, status, headers, body);
+    }
+    : null,
+});
 
 /* 头像聚合：网关自己的端点（自己验身份），不是反代。 */
 const avatarPack = createAvatarPack();
+
+/* ------------------------------------------------------------------ */
+/* 头像缩放缓存：原图 1.4~2.3MB 的 PNG → 几十 KB 的 WebP               */
+/* ------------------------------------------------------------------ */
+
+const AVATAR_UPSTREAM_TIMEOUT_MS = 15_000;
+/** 原图单张上限：实测最大 2.4MB，给 8MB 余量。超了就不处理，交回普通反代流式转发。 */
+const AVATAR_UPSTREAM_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 回环取一张头像原图，供 avatar-cache 缩放。
+ *
+ * 与普通反代保持同一套约定，避免出现「第二套上游客户端」：
+ *   - 同一个上游基址（UPSTREAM）与同一个 Host 覆盖（upstreamHeaders）；
+ *   - 同一套凭据：转发调用方的 Cookie（sanitizeUpstreamHeaders 会剥掉 Authorization 等，Cookie 保留）；
+ *   - 同一个上游路由：`upstreamPathForAvatarId` 与 avatar-pack 共用一份拼法。
+ * 条件请求头一律不带：上游若回 304，这里就拿不到图了。
+ *
+ * 永远 resolve，不 reject：任何失败都只是「不处理」，由调用方退回原代理。
+ */
+function fetchUpstreamAvatar({ id, cookie, userAgent }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const headers = upstreamHeaders({
+      cookie,
+      accept: 'image/*',
+      connection: 'close',
+      ...(userAgent ? { 'user-agent': userAgent } : {}),
+    });
+
+    let avatarReq;
+    try {
+      avatarReq = http.request(
+        {
+          host: UPSTREAM.host,
+          port: UPSTREAM.port,
+          method: 'GET',
+          path: upstreamPathForAvatarId(id),
+          headers,
+        },
+        (upstreamRes) => {
+          const status = upstreamRes.statusCode || 0;
+          if (status !== 200) {
+            upstreamRes.resume();
+            finish({ ok: false, status });
+            return;
+          }
+
+          const chunks = [];
+          let size = 0;
+          let tooLarge = false;
+          upstreamRes.on('data', (chunk) => {
+            if (tooLarge) return;
+            size += chunk.length;
+            if (size > AVATAR_UPSTREAM_MAX_BYTES) {
+              tooLarge = true;
+              chunks.length = 0;
+              upstreamRes.destroy();
+              finish({ ok: false, reason: 'too_large' });
+              return;
+            }
+            chunks.push(chunk);
+          });
+          upstreamRes.on('end', () => {
+            if (!tooLarge) finish({ ok: true, bytes: Buffer.concat(chunks) });
+          });
+          upstreamRes.on('error', () => finish({ ok: false, reason: 'read_failed' }));
+          // 上游没读完就断开不会有 'end'：不接住 'close' 这个 promise 会永远挂着。
+          upstreamRes.on('close', () => {
+            if (!upstreamRes.complete) finish({ ok: false, reason: 'read_failed' });
+          });
+        },
+      );
+    } catch {
+      finish({ ok: false, reason: 'request_failed' });
+      return;
+    }
+
+    avatarReq.setTimeout(AVATAR_UPSTREAM_TIMEOUT_MS, () => {
+      avatarReq.destroy(new Error(`avatar upstream idle > ${AVATAR_UPSTREAM_TIMEOUT_MS}ms`));
+    });
+    avatarReq.on('error', () => finish({ ok: false, reason: 'request_failed' }));
+    avatarReq.end();
+  });
+}
+
+/* 头像缩放缓存：命中磁盘就直接回 WebP，未命中才回源本机原图（回环，不占隧道带宽）。
+ * 任何异常都返回 false 交回普通反代 —— 缩放是优化，不能让头像功能挂掉。 */
+const avatarCache = createAvatarCache({
+  fetchUpstream: (id, ctx) => fetchUpstreamAvatar({ id, ...ctx }),
+  log: (line) => {
+    if (typeof logger?.log === 'function') logger.log({ level: 'warn', msg: line });
+    else console.warn(line);
+  },
+});
+
+/* 会话摘要：同样是网关自己的端点，手机回前台时问一句「谁跑完了」。 */
+const sessionDigest = createSessionDigest();
+
+/** 摘要路径判定：URL 解析失败就当不匹配（不把异常抛进请求主流程）。 */
+function matchesDigestPath(rawUrl) {
+  try {
+    return new URL(rawUrl, 'http://localhost').pathname === SESSION_DIGEST_PATH;
+  } catch {
+    return false;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* 本机 owner 代办：仅精确 POST /api/sessions/new                        */
@@ -462,6 +635,7 @@ async function maybeProxyOwnerSession(req, res, principal, createClient = null) 
 const { proxyUpgrade } = createWebsocketProxy({
   isAllowedGatewayOrigin,
   log: logger ? (entry) => logger.log(entry) : null,
+  frameLog: wsFrameLogger ? (entry) => wsFrameLogger.log(entry) : null,
 });
 
 async function handleRequest(req, res) {
@@ -559,7 +733,21 @@ async function handleRequest(req, res) {
     await avatarPack.handle(req, res);
     return;
   }
+  // 会话摘要：手机回前台时问一句「离开期间哪些会话跑完了」。
+  // 与头像聚合一样必须放在 isApiPath 之前，否则会被整体反代给上游（宿主没有这个路由）。
+  if (req.method === 'GET' && matchesDigestPath(url)) {
+    await sessionDigest.handle(req, res);
+    return;
+  }
+  // 头像缩放：把 1024×1024 的原图（1.4~2.3MB）缩成 WebP（几十 KB）再发。
+  // 必须排在 isApiPath 之前：否则会被整体反代给上游（原图直接流出去，白缩一遍）。
+  // handle 返回 false 表示没处理（未命中路由 / 上游非 200 / 缩放失败），照旧走下面的反代。
+  if (avatarCache.match(url)) {
+    if (await avatarCache.handle(req, res)) return;
+  }
   if (isApiPath(url)) {
+    // 尾部快照先试一把：命中就不打扰上游（这一步不消耗 owner bearer，也不建连接）。
+    if (tailServe && tailServe.tryServe(req, res)) return;
     // owner bearer 只用于精确的 POST /api/sessions/new；new-detached 和相似路径
     // 仍按原样带客户端 Cookie 反代，绝不共用 isCreateSessionPath 的宽匹配。
     if (req.method === 'POST' && isOwnerSessionCreatePath(url) && createSessionAuth?.ok) {
@@ -665,11 +853,25 @@ server.listen(LISTEN.port, LISTEN.host, () => {
     });
     // 启动时清一次过期日志；失败不影响服务（prune 内部已兜底，永不 reject）。
     logger.prune().catch(() => {});
+    if (wsFrameLogger) wsFrameLogger.prune().catch(() => {});
+    // 正文日志开了就得在日志里留一条：以后看到明文正文，能知道是谁、为什么开的。
+    if (LOG_WS_BODY) {
+      logger.log({
+        level: 'warn',
+        kind: 'lifecycle',
+        event: 'config',
+        detail:
+          'HANA_GW_LOG_WS_BODY=1：WS 帧正文会写进 ws-frames 日志，含用户输入与图片等隐私内容；排障完请关掉',
+      });
+    }
   }
   console.log(`[hana-mobile] gateway listening on ${GATEWAY_SCHEME}://${shown}:${LISTEN.port}`);
   console.log(`[hana-mobile] static root : ${WEB_ROOT}`);
   console.log(`[hana-mobile] upstream    : http://${UPSTREAM.host}:${UPSTREAM.port}`);
-  console.log(`[hana-mobile] ws logging  : ${LOG_WS ? WS_LOG : 'off'}`);
+  const wsFrameLabel = LOG_WS
+    ? `${path.join(LOG_DIR, 'ws-frames-*.jsonl')}${LOG_WS_BODY ? '（含正文）' : ''}`
+    : 'off';
+  console.log(`[hana-mobile] ws frames   : ${wsFrameLabel}`);
   if (EXTERNAL_HTTPS) {
     console.log(
       '[hana-mobile] external TLS: HANA_GW_EXTERNAL_HTTPS=1（Set-Cookie 补 Secure，卡片 CSP 用 https 前缀）',
@@ -683,6 +885,7 @@ process.on('SIGINT', () => {
       logger.log({ level: 'info', kind: 'lifecycle', event: 'stop', detail: 'SIGINT' });
       await logger.flush();
     }
+    if (wsFrameLogger) await wsFrameLogger.flush();
     process.exit(0);
   });
 });

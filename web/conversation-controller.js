@@ -17,31 +17,102 @@ import { sessionTitle } from './session-list-view.js';
 // mood 块是渲染标记，不属于「回复正文」：对账比较正文前要先剥掉（纯函数，不碰 DOM）。
 import { splitMoodBlock } from './protocol.js';
 
+/* 下面的 typedef 是注入的「袋子」的契约，按本文件实际读写的字段收：
+ * 以前一律写成 @param {object}，读 state.session / renderer.beginHistoryPage 时 tsc 只能说
+ * 「object 上没有这个属性」。
+ */
+
 /**
- * @param {object} options
- * @param {object} options.state 共享状态对象
- * @param {Document} options.document
- * @param {(id: string) => Element|null} options.getElement
- * @param {Function} options.api 带鉴权的请求函数
- * @param {object} options.renderer chat-renderer 实例
- * @param {object} options.composer composer-controller 实例
- * @param {object} options.sockets websocket-client 实例
- * @param {object} options.streamState 流式游标
- * @param {object|null} options.cardController
- * @param {object|null} options.actionConfirmation
- * @param {object|null} options.workspaceView
- * @param {() => boolean} options.closeFilePreview
- * @param {(view: string) => void} options.show 视图切换
- * @param {(ns?: string) => Promise<void>} options.loadSessions
- * @param {(msg: string) => void} options.flash
- * @param {(s: object) => string} options.sessionFolder
- * @param {() => void} options.closeDrawer 打开/新建会话前把抽屉收起来
+ * 会话控制读写的应用级状态（app.js 的 S）。
+ *
+ * session 的形状就是 openSession 里写进去的那一份；额外字段（memoryOn / currentAgent /
+ * agentName / principal）都在 S 的字面量或登录后补上。
+ *
+ * @typedef {object} ConvState
+ * @property {{path?: string, sessionId?: string|null, title?: string, folder?: string|null,
+ *   agentName?: string|null, agentId?: string|null, namespace?: 'home'|'code', cwd?: string,
+ *   workspaceMountId?: string, workspaceLabel?: string}|null} session 当前会话；回列表时置 null
+ * @property {object} [principal] 登录身份（只做引用比较，不读字段，所以收成 object 而不是 any）
+ * @property {{id?: string, name?: string}|null} [currentAgent] 当前 agent（新建会话时带上）
+ * @property {string} [agentName] 全局 agent 名
+ * @property {boolean|null} [memoryOn] 记忆开关；null = 未知（不写副标题）
+ * @property {boolean} busy 是否在生成（决定能不能整页替换历史）
+ */
+
+/**
+ * chat-renderer 实例里会话控制用到的那几个方法。
+ * @typedef {object} ConvRenderer
+ * @property {(options?: {preserveLiveTurn?: boolean}) => void} beginHistoryPage 一页历史的开始边界
+ * @property {(options?: {preserveLiveTurn?: boolean}) => boolean} endHistoryPage 一页历史的结束边界
+ * @property {(entry: any, options?: {sessionFiles?: Array}) => boolean} renderEntry 画一条历史
+ * @property {() => void} resetTurnState
+ * @property {() => void} clearStats
+ * @property {() => string} currentStreamingRaw 屏上这一轮已上屏的正文
+ * @property {(text: string, isError?: boolean) => void} appendSystem
+ * @property {(text: string, images?: Array<any>, files?: Array<any>, ts?: number) => any} appendUser 画一条用户消息
+ * @property {(force?: boolean) => void} scrollToBottom
+ */
+
+/**
+ * composer-controller 实例里会话控制用到的那几个方法。
+ * @typedef {object} ConvComposer
+ * @property {() => void} clearAttach
+ * @property {(busy: boolean) => void} setBusy
+ */
+
+/**
+ * websocket-client 实例里会话控制用到的那几个方法。
+ * @typedef {object} ConvSockets
+ * @property {() => void} connect
+ * @property {() => void} drop
+ */
+
+/**
+ * 流式游标（web/stream-state.js 的实例）。切会话 / 回列表时要重置。
+ * @typedef {object} ConvStreamState
+ * @property {() => void} reset
+ */
+
+/**
+ * 阅读位置记忆（web/scroll-memory.js 的实例）。
+ * @typedef {object} ConvScrollMemory
+ * @property {(key: string, position: {scrollTop: number, scrollHeight: number, clientHeight: number}) => any} remember
+ * @property {(key: string) => {scrollTop: number, atBottom: boolean, ts: number}|null} recall
+ * @property {() => void} flush
+ * @property {() => void} clearAll
+ */
+
+/**
+ * @param {object} [options]
+ * @param {ConvState} [options.state] 共享状态对象（app.js 的 S）
+ * @param {Document} [options.document]
+ * @param {(id: string) => HTMLElement|null} [options.getElement]
+ * @param {(pathname: string, init?: object) => Promise<any>} [options.api] 带鉴权的请求函数
+ * @param {ConvRenderer} [options.renderer] chat-renderer 实例
+ * @param {ConvComposer} [options.composer] composer-controller 实例
+ * @param {ConvSockets} [options.sockets] websocket-client 实例
+ * @param {ConvStreamState} [options.streamState] 流式游标
+ * @param {{clear: () => void}|null} [options.cardController] 卡片控制器（只用到整页清空）
+ * @param {ReturnType<typeof import('./action-confirmation.js').createActionConfirmation> | null} [options.actionConfirmation] 工具权限确认弹层（web/action-confirmation.js 的实例）。
+ *   它自己的工厂把返回类型声明成 object，从调用方这一侧无法把 cancelAll / isOpen 收紧；
+ *   要收紧得改 action-confirmation.js，不在本次范围。下面每处调用都先用 typeof 问一句。
+ * @param {{close: () => void, back: () => boolean}|null} [options.workspaceView] 工作区面板（层级由它自己管）
+ * @param {() => boolean} [options.closeFilePreview]
+ * @param {(view: string) => void} [options.show] 视图切换
+ * @param {(ns?: string) => Promise<void>} [options.loadSessions]
+ * @param {(msg: string) => void} [options.flash]
+ * @param {(s: object) => string} [options.sessionFolder]
+ * @param {() => void} [options.closeDrawer] 打开/新建会话前把抽屉收起来
  * @param {(session: object) => void} [options.onSessionOpened] 会话已同步就位（历史还没到）时通知，
  *   给模型 chip 这类「一看会话就要刷新」的东西用
  * @param {() => void} [options.onTranscriptCleared] 消息区被整页清空时通知（切会话/重载），
  *   给子代理卡这类自己持有节点引用的视图做重置用
- * @param {object|null} [options.scrollMemory] 阅读位置记忆实例（测试注入；缺省自建）
- * @param {object|null} [options.scrollStorage] 自建记忆用的 storage（缺省 localStorage）
+ * @param {(() => ({text: string, at: number}|null))|null} [options.pendingLocalSend]
+ *   本端最近一次发出的消息；整页替换后拿它兜底（见 keepLocalSendVisible）
+ * @param {number} [options.localSendVisibleMs=120000] 兜底窗口：发送后这么久内，页里没有那条就补回屏上
+ * @param {ConvScrollMemory|null} [options.scrollMemory] 阅读位置记忆实例（测试注入；缺省自建）
+ * @param {{getItem: Function, setItem: Function, removeItem: Function}|null} [options.scrollStorage]
+ *   自建记忆用的 storage（缺省 localStorage）
  * @param {number} [options.scrollMemoryMaxEntries=50] 记忆最多保留多少个会话
  */
 export function createConversationController({
@@ -64,11 +135,39 @@ export function createConversationController({
   closeDrawer,
   onSessionOpened = () => {},
   onTranscriptCleared = null,
+  /** 本端最近一次发出的消息 `{ text, at }`；整页替换后拿它兜底（见 keepLocalSendVisible）。 */
+  pendingLocalSend = null,
+  /** 兜底窗口：发送后这么久内，页面里没有那条就补回屏上。 */
+  localSendVisibleMs = 120000,
   scrollMemory: injectedScrollMemory = null,
   scrollStorage,
   scrollMemoryMaxEntries = 50,
 } = {}) {
   if (!state) throw new TypeError('createConversationController requires { state }');
+
+  /* ------------------------------------------------------------------ */
+  /* 副标题里的上下文占用                                                */
+  /* ------------------------------------------------------------------ */
+
+  /*
+   * 上下文占用（%）是副标题的一部分，副标题是这里的函数，所以数字也归这里。
+   * event-router 只负责把 context_usage 转达过来（注入 setContextPercent），不再往 S 上写。
+   */
+  let ctxPct = null;
+
+  /**
+   * 记下服务端报的上下文占比。非有限数（null / NaN / 字符串）就是「未知」，存 null；
+   * 四舍五入只在这里做一次，副标题直接拿来拼。
+   * @param {number|null} pct
+   */
+  function setContextPercent(pct) {
+    ctxPct = Number.isFinite(pct) ? Math.round(pct) : null;
+  }
+
+  /** 当前上下文占用（%）；未知为 null。给兼容访问器与用例看。 */
+  function contextPercent() {
+    return ctxPct;
+  }
 
   /* ------------------------------------------------------------------ */
   /* 阅读位置记忆（E2）                                                */
@@ -148,6 +247,13 @@ export function createConversationController({
     }
   }
 
+  /**
+   * 新建会话。
+   *
+   * @param {string} [namespace] 宿主只认 home/code；其它值在函数里收成 home，所以这里收 string
+   * @param {{cwd?: string|null, thinkingLevel?: string|null}} [options] Code 会话的项目目录与思考档位
+   *   （由装配层从宿主当前选择读好再传，本模块不知道宿主怎么挑）
+   */
   async function newSession(namespace = 'home', { cwd, thinkingLevel } = {}) {
     // 宿主只认 home / code（Bnt(body) 读到其它值直接 400），未知值在入口就收敷成 home。
     const ns = namespace === 'code' ? 'code' : 'home';
@@ -169,6 +275,7 @@ export function createConversationController({
     // 导航代次快照：create 期间用户自己打开了别的会话，就不能再抢回来。
     const epoch = navEpoch;
     try {
+      /** @type {{agentId?: string, namespace: 'home'|'code', cwd?: string|null, thinkingLevel?: string|null}} */
       const body = {
         ...(state.currentAgent?.id ? { agentId: state.currentAgent.id } : {}),
         // 命名空间必须显式传：不传宿主一律建 Chat。
@@ -232,7 +339,8 @@ export function createConversationController({
       workspaceMountId: s.workspaceMountId,
       workspaceLabel: s.workspaceLabel,
     };
-    state.ctxPct = null;
+    // 换了会话，副标题上的上下文占用属于上一个会话的用量：先清空等新的 context_usage。
+    ctxPct = null;
     // 记下本次打开归属的会话对象：慢历史收尾时如果用户已经切走，不能再碰别人的连接。
     const openedSession = state.session;
     // 首屏落地时如果记忆里有位置就恢复它，否则照旧贴底（见 renderHistoryPage）。
@@ -270,7 +378,7 @@ export function createConversationController({
     if (folder) bits.push(folder);
     if (state.memoryOn === true) bits.push('记忆开');
     else if (state.memoryOn === false) bits.push('记忆关');
-    if (Number.isFinite(state.ctxPct)) bits.push(`上下文 ${state.ctxPct}%`);
+    if (Number.isFinite(ctxPct)) bits.push(`上下文 ${ctxPct}%`);
     return bits.join(' · ');
   }
 
@@ -299,6 +407,8 @@ export function createConversationController({
   // 不能用 DOM 子节点数判断——分页控制带本身就挂在 transcript 的第一个子节点上，
   // 数节点会把那条「加载中…/重试」误当成已有内容。
   let transcriptRendered = false;
+  // 已经往前翻出多少页更早的历史（每页 prepend 加一）。整页换屏时归零。
+  let olderPagesLoaded = 0;
   // 首屏/重载是否要等「这一页真的到了」再替换 DOM（见 loadHistory 注释）。
   let historyPendingReplace = false;
 
@@ -337,6 +447,12 @@ export function createConversationController({
 
   /** 最近一次历史页真的上屏的时间：常规历史同步用它避开「刚同步过又同步一次」。 */
   let lastHistoryPageAt = 0;
+  /**
+   * 本地刚发过东西：下一次 open 要求网关绕过尾部快照。
+   * 不这么做的话，发完消息退出去再进来（30 秒内）会读到发之前的旧快照，
+   * 刚发的那条凭空消失——比慢一点难受得多。
+   */
+  let tailDirty = false;
 
   /**
    * 最近一次「对账真的把历史取回来了」的时间。
@@ -421,7 +537,7 @@ export function createConversationController({
    * 也可能带着 mood 块，逐字相等永远对不上。
    */
   function hasNewerCompleteReply(page) {
-    const live = comparableText(state.streamingRaw);
+    const live = comparableText(renderer.currentStreamingRaw());
     if (!live) return false;
     const history = comparableText(lastAssistantText(page));
     if (!history || history.length <= live.length) return false;
@@ -455,6 +571,7 @@ export function createConversationController({
    * @param {object} [options]
    * @param {(() => boolean)|null} [options.isStillQuiet] 取历史期间「一条事件都没来」的复核
    * @param {(() => void)|null} [options.onRecovered] 历史证明这一轮已跑完时的收尾回调
+   * @param {number|null} [options.activityToken] 开窗时的事件计数；isStillQuiet 拿它对比
    * @returns {Promise<boolean>} 是否按「跑完了」收尾并换屏
    */
   async function reconcileAfterForeground({ isStillQuiet = null, onRecovered = null, activityToken = null } = {}) {
@@ -500,6 +617,13 @@ export function createConversationController({
   const historyPager = createHistoryPager({
     api,
     pageSize: 50,
+    // 发完消息 / 编辑重发之后，下一次 open 不能让网关拿旧快照把我们自己刚发的东西盖掉。
+    // 标记是一次性的：open 结束（无论成败）就收回，不会粘在后面的普通打开上。
+    extraQuery: () => {
+      if (!tailDirty) return null;
+      tailDirty = false;
+      return { _nc: String(Date.now()) };
+    },
     // kind 区分两条路径：'older'（加载更早，prepend）在生成中也放行——它只往旧消息前面
     // 插节点，不动实时轮；'open'（首屏 / 重载）仍是整页替换，生成中照旧拦住。
     canLoad: (kind) => (kind === 'older' ? true : !state.busy),
@@ -557,6 +681,8 @@ export function createConversationController({
   function replaceTranscriptHistory() {
     getElement('transcript').innerHTML = '';
     transcriptRendered = false;
+    // 旧页已经随 DOM 一起没了，计数必须跟着归零，否则下一次后台同步会被误判成「用户翻过历史」。
+    olderPagesLoaded = 0;
     historyView.reset();
     // DOM 整页换掉：回放合并状态里握着的旧轮已经脱离文档，不清就会把下一页的正文写进孤儿节点。
     if (typeof renderer.beginHistoryPage === 'function') renderer.beginHistoryPage();
@@ -587,9 +713,61 @@ export function createConversationController({
     return true;
   }
 
-  /** 一页历史落到 DOM：更早页先立锚点，节点从第一次挂载就在最终位置。 */
+  /**
+   * 刚发出的那条如果不在这一页历史里，就补回屏上。返回是否真的补了一条。
+   *
+   * 真机场景（2026-11-10）：发完长消息 → 回列表 → 再点进来。`openSession` 先清屏，
+   * 再整页渲染网关给的那一页；如果那一页停在发送之前（尾部快照 / 宿主还没落盘），
+   * 乐观画好的用户气泡就随清屏一起没了，屏上只剩助手正在跑的那一轮——看起来就是
+   * 「我发的消息不见了」。
+   *
+   * 只在发送后的短窗口内兜底（localSendVisibleMs）：再晚历史一定已经包含它，补就是重复；
+   * 页里已经有这条时也不补，同一个原因。
+   * @param {Array<any>} entries 本页历史
+   * @returns {boolean}
+   */
+  function keepLocalSendVisible(entries) {
+    if (typeof pendingLocalSend !== 'function') return false;
+    const last = pendingLocalSend();
+    if (!last || typeof last.text !== 'string' || !last.text) return false;
+    if (!(Date.now() - Number(last.at) < localSendVisibleMs)) return false;
+    if (pageHasUserText(entries, last.text)) return false;
+    renderer.appendUser(last.text, [], [], Number(last.at) || Date.now());
+    if (typeof renderer.scrollToBottom === 'function') renderer.scrollToBottom(true);
+    return true;
+  }
+
+  /** 这一页里有没有内容相同（忽略空白）的用户消息。 */
+  function pageHasUserText(entries, text) {
+    const wanted = String(text).replace(/\s+/g, '');
+    if (!wanted) return true;
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const msg = entry?.message || entry;
+      const role = msg?.role || entry?.role;
+      if (role !== 'user') continue;
+      if (userTextOf(msg?.content ?? msg?.text ?? '').replace(/\s+/g, '').includes(wanted)) return true;
+    }
+    return false;
+  }
+
+  /** 用户消息正文：宿主可能给字符串，也可能给 block 数组。 */
+  function userTextOf(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+      .map((block) => (typeof block === 'string' ? block : block && typeof block.text === 'string' ? block.text : ''))
+      .join('');
+  }
+
+  /**
+   * 一页历史落到 DOM：更早页先立锚点，节点从第一次挂载就在最终位置。
+   * @param {{entries?: Array<any>, prepend?: boolean, hasMore?: boolean, sessionFiles?: Array<any>}} [page]
+   *   分页器给的那一页；缺字段就按空页处理（与改动前的默认值一致）
+   */
   function renderHistoryPage({ entries, prepend = false, hasMore = false, sessionFiles = [] } = {}) {
     const into = Boolean(prepend);
+    // 已经翻出多少页更早的历史：后台同步靠它决定「能不能整页替换」（见 loadHistory）。
+    if (into) olderPagesLoaded += 1;
     // 每页都是一个回放边界：只在同一页内合并连续的 assistant，不凭无身份的邻接跨页合并。
     // prepend 是往更早翻一页，可能落在生成中：preserveLiveTurn 让渲染器把实时轮指针
     // 暂存起来、结束边界再原样还原，否则历史回放会把正在追加的那一轮顶掉。
@@ -604,6 +782,9 @@ export function createConversationController({
       for (const entry of entries || []) {
         if (renderer.renderEntry(entry, { sessionFiles })) count += 1;
       }
+      // 刚发出去的那条要能活过整页替换（回列表再点进来就是这条路）。放在历史边界**内**
+      // 补：appendUser 会 resetTurnState，落在边界外会把正在跑的那一轮拆成两段。
+      if (!into && keepLocalSendVisible(entries)) count += 1;
     } finally {
       // 结束边界：本页的历史轮已经上屏，但一个都不能留在 state.turn 里——
       // 否则实时 delta 会续进历史轮，status:true/turn_end 会把它当本轮收尾（改尾注、发通知）。
@@ -641,6 +822,12 @@ export function createConversationController({
    */
   async function loadHistory({ clearNow = false } = {}) {
     if (!state.session) return;
+    // 已经往前翻过历史时，后台补拉（宿主 idle / 回到前台）不能整页替换：那会把用户（或搜索
+    // 定位）翻出来的更早页全冲掉，真机上就是「定位翻到 44 轮又退回 29 轮」。尾部对齐交给用户
+    // 回到最新页、发消息时的正常重载——丢历史的代价比尾巴晚一拍对齐大得多。
+    // 生成中不能跳：那种情况本来就发不出请求，但状态带要说「正在生成回复」，别让用户以为没反应。
+    // 刚发过消息（tailDirty）也不能跳：那一次重载是为了拿到自己刚发的那条，跳过就是「凭空消失」。
+    if (!clearNow && olderPagesLoaded > 0 && !state.busy && !tailDirty) return;
     historyPageRendered = false;
     if (clearNow) {
       replaceTranscriptHistory();
@@ -746,8 +933,15 @@ export function createConversationController({
     recentlySynced,
     // 「刚刚做过前台对账吗」：只认对账，避免把正常 idle 同步也噤掉。
     justReconciled,
+    // 搜索定位要用：往前翻一页历史（会走同一套游标/去重/epoch）。
+    loadOlderPage: () => historyPager.loadOlder(),
+    // 本地刚发过消息（发送 / 编辑重发）：下一次取历史必须绕过网关尾部快照。
+    markTailDirty: () => { tailDirty = true; },
     backToList,
     chatSubtitle,
+    // 上下文占用的主人：event-router 收到 context_usage 就调 setContextPercent（app 注入）。
+    setContextPercent,
+    contextPercent,
     renderHistoryPage,
   };
 }

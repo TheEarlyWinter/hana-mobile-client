@@ -88,9 +88,9 @@ function shouldReconcileTask(err) {
 }
 
 /**
- * @param {object} options
- * @param {ReturnType<import('./client.js').createFeedClient>} options.client
- * @param {() => object|null} options.getIdentity 当前 principal
+ * @param {object} [options]
+ * @param {ReturnType<typeof import('./client.js').createFeedClient>} [options.client]
+ * @param {() => object|null} [options.getIdentity] 当前 principal
  * @param {(snapshot: FeedSnapshot) => void} [options.onChange]
  * @param {(err: Error) => void} [options.onError]
  * @param {number} [options.mergeDelayMs] feed-changed 短窗口，默认 250ms

@@ -18,10 +18,10 @@ function keyOf(item) {
 }
 
 /**
- * @param {object} options
+ * @param {object} [options]
  * @param {Document} [options.document]
  * @param {typeof IntersectionObserver} [options.IntersectionObserver]
- * @param {(signals: object[]) => Promise<any>} options.sendSignals
+ * @param {(signals: object[]) => Promise<any>} [options.sendSignals]
  * @param {(itemId: string, revision: number) => void} [options.onRead]
  * @param {() => number} [options.now]
  * @param {typeof setTimeout} [options.setTimeout]

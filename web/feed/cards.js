@@ -98,12 +98,12 @@ function toCardError(err) {
 }
 
 /**
- * @param {object} options
+ * @param {object} [options]
  * @param {Document} [options.document]
  * @param {Window} [options.window]
  * @param {typeof IntersectionObserver} [options.IntersectionObserver]
- * @param {(item: import('./client.js').FeedItem, options: {isCurrent: () => boolean}) => Promise<{cardId:string,revision:number,url:string|null,html?:string}>} options.prepareCard
- * @param {ReturnType<import('./read-tracker.js').createFeedReadTracker>} [options.readTracker]
+ * @param {(item: import('./client.js').FeedItem, options: {isCurrent: () => boolean}) => Promise<{cardId:string,revision:number,url:string|null,html?:string}>} [options.prepareCard]
+ * @param {ReturnType<typeof import('./read-tracker.js').createFeedReadTracker>} [options.readTracker]
  * @param {() => object|null} [options.getIdentity]
  * @param {(err: Error) => void} [options.onError]
  * @param {number} [options.timeoutMs]

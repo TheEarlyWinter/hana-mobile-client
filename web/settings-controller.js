@@ -109,8 +109,8 @@ function resolveActiveModelRef(activeModel, models) {
 /**
  * 创建设置控制器
  *
- * @param {object} options
- * @param {Function} options.request 注入的网络请求函数：(pathname: string, init?: object) => Promise<any>
+ * @param {object} [options]
+ * @param {Function} [options.request] 注入的网络请求函数：(pathname: string, init?: object) => Promise<any>
  * @param {object} [options.storage] 存储适配器
  * @param {Function} [options.onStateChange] 状态改变回调：(state) => void
  * @param {string|null} [options.initialSessionPath]

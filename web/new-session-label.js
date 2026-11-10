@@ -13,8 +13,8 @@
  */
 
 /**
- * @param {object} options
- * @param {Document} options.document
+ * @param {object} [options]
+ * @param {Document} [options.document]
  * @param {string[]} [options.buttonIds] 需要同步文案的按钮 id
  * @param {Record<string, string>} [options.labels] 命名空间 → 显示词
  * @returns {{ setNamespace: (namespace: string) => void }}

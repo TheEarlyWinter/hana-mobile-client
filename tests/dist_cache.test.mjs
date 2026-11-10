@@ -8,7 +8,9 @@
  * 3. 网关响应首页时按清单把稳定引用换成哈希名，首页自身仍然 no-store；
  * 4. 只有清单点名的产物发 immutable，清单与其它 dist 文件 no-store；
  *    上一版哈希名与固定名用当前产物兜底（no-store），其它不存在的 /dist/* 仍 404；
- *    清单缺失或被写坏时首页退化成原样输出（引用 /dist/app.js），不是 500。
+ *    清单缺失或被写坏时首页退化成原样输出（引用 /dist/app.js），不是 500；
+ * 5. 条件请求按弱比较认 `W/` 前缀、逗号列表与 `*`，304 带的缓存策略/CSP 与 200 一致；
+ *    错误响应（坏 URL 400、越界 403、404）一律显式 no-store。
  *
  * 全部判定来自构建产物与真实 HTTP 响应，不靠等待。
  */
@@ -31,6 +33,7 @@ const manifestFile = path.join(dist, 'manifest.json');
 
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 const HTML_NO_STORE = 'no-store, no-cache, must-revalidate';
+const HTML_CSP = "frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 let bad = 0;
 async function t(name, fn) {
@@ -297,6 +300,85 @@ try {
     } finally {
       await fs.rm(scratch, { recursive: true, force: true });
     }
+  });
+
+  await t('13. 条件请求命中 → 304，缓存策略与 200 完全一致', async () => {
+    // 304 也是这个 URL 的一份响应：中间层会拿它的头更新这条缓存，缺了 cache-control
+    // 就等于让「命中」把原来的策略抹掉（immutable 变回可协商，no-store 也保不住）。
+    for (const [pathname, expected] of [
+      ['/', HTML_NO_STORE],
+      [`/dist/${manifest.js}`, IMMUTABLE],
+      [`/dist/${manifest.css}`, IMMUTABLE],
+    ]) {
+      const first = await request(port, pathname);
+      assert.equal(first.status, 200);
+      assert.equal(first.headers['cache-control'], expected, `${pathname} 的 200 缓存策略变了`);
+      const etag = first.headers.etag;
+      assert.match(String(etag), /^W\/"[^"]+"$/, `${pathname} 应发弱 etag`);
+
+      const again = await request(port, pathname, { headers: { 'if-none-match': etag } });
+      assert.equal(again.status, 304, `${pathname} etag 完全相等时必须 304`);
+      assert.equal(again.body.length, 0, '304 不能带正文');
+      assert.equal(again.headers.etag, etag, '304 要回同一条 etag');
+      assert.equal(again.headers['cache-control'], expected, `${pathname} 的 304 必须带同一套缓存策略`);
+    }
+  });
+
+  await t('13b. 首页的 304 仍带 CSP，与 200 一致', async () => {
+    const first = await request(port, '/');
+    assert.equal(first.headers['content-security-policy'], HTML_CSP, '200 的 CSP 变了就说明这条用例要一起改');
+    const again = await request(port, '/', { headers: { 'if-none-match': first.headers.etag } });
+    assert.equal(again.status, 304);
+    assert.equal(again.headers['content-security-policy'], HTML_CSP, '304 丢掉 CSP，中间层会按无 CSP 更新这份文档的元数据');
+  });
+
+  await t('14. if-none-match 按弱比较解析列表、* 与去掉 W/ 的强形式', async () => {
+    const pathname = `/dist/${manifest.css}`;
+    const etag = (await request(port, pathname)).headers.etag;
+    const strong = etag.replace(/^W\//, '');
+    assert.notEqual(strong, etag, '我们要发的必须是弱 etag，才谈得上弱比较');
+
+    const cases = [
+      ['列表里的第二项', `"0123456789abcdef", ${etag}`],
+      ['列表里的中间项', `"0123456789abcdef", ${etag}, "fedcba9876543210"`],
+      ['同值的强形式', strong],
+      ['通配符', '*'],
+    ];
+    for (const [label, value] of cases) {
+      const res = await request(port, pathname, { headers: { 'if-none-match': value } });
+      assert.equal(res.status, 304, `${label} 应命中 304：${value}`);
+      assert.equal(res.headers['cache-control'], IMMUTABLE, `${label} 的 304 也要带缓存策略`);
+      assert.equal(res.body.length, 0);
+    }
+  });
+
+  await t('14b. 条件不命中／空头／坏形态仍老老实实 200 带正文', async () => {
+    const pathname = `/dist/${manifest.js}`;
+    const etag = (await request(port, pathname)).headers.etag;
+    const cases = [
+      ['别的 etag', 'W/"0000000000"'],
+      ['列表里没有我们', '"0000000000", "1111111111"'],
+      ['只有 W/ 前缀', 'W/'],
+      ['空串', ''],
+    ];
+    for (const [label, value] of cases) {
+      const res = await request(port, pathname, { headers: { 'if-none-match': value } });
+      assert.equal(res.status, 200, `${label} 不该命中 304：${JSON.stringify(value)}`);
+      assert.equal(res.headers.etag, etag);
+      assert.ok(res.body.length > 0, '200 必须有正文');
+      assert.equal(res.headers['cache-control'], IMMUTABLE);
+    }
+  });
+
+  await t('15. 错误响应统一 no-store（坏 URL 400、越界 403）', async () => {
+    // 400 以前什么缓存头都不带，浏览器可能按启发式把「坏 URL」记一段时间。
+    const badUrl = await request(port, '/bad%zz.html');
+    assert.equal(badUrl.status, 400, '非法百分号编码必须 400');
+    assert.equal(badUrl.headers['cache-control'], 'no-store', '400 也要显式 no-store');
+
+    const escape = await request(port, '/..%2f..%2fpackage.json');
+    assert.equal(escape.status, 403, '解到 web/ 外面必须 403');
+    assert.equal(escape.headers['cache-control'], 'no-store');
   });
 } finally {
   await new Promise((resolve) => server.close(resolve));

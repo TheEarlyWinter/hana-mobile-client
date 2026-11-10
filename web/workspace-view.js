@@ -40,9 +40,9 @@ function mightBeRasterImage(name) {
 /**
  * 创建工作区视图管理器。
  *
- * @param {object} options
- * @param {object} options.service - workspace-service 实例
- * @param {Document} options.document - DOM 文档对象
+ * @param {object} [options]
+ * @param {object} [options.service] - workspace-service 实例
+ * @param {Document} [options.document] - DOM 文档对象
  * @param {Function} [options.confirmAction] - 交互确认函数 (async ({ title, message, target, fileNames }) => boolean)，缺省 fail-closed (返回 false)
  * @param {Function} [options.toast] - 提示消息浮条
  * @param {Function} [options.download=startDownload] - 下载入口（WebView 只认导航 + Content-Disposition）

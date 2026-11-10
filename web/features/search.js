@@ -18,6 +18,8 @@ import { createMessageSearch } from '../message-search.js';
 export function createSearchFeature({ getElement, api, getNamespace, openSession, document: doc }) {
   let mounted = false;
   let view = null;
+  /** 最近一次搜索词：结果里只带 snippet，定位要靠原词（snippet 可能是截断的）。 */
+  let lastQuery = '';
 
   /**
    * 搜一次：先标题、不够再扫正文。
@@ -50,15 +52,33 @@ export function createSearchFeature({ getElement, api, getNamespace, openSession
     view = createMessageSearch({
       document: doc,
       container: doc.body,
-      onSearch: (query) => searchSessionMessages(query),
+      onSearch: (query) => {
+        lastQuery = String(query || '').trim();
+        return searchSessionMessages(query);
+      },
       onSelect: (result) => {
         if (!result || !result.path) return;
+        // 宿主搜索结果的字段在 JSDoc 里只能是 object（面板不关心具体形状），这里给两个定位用的
+        // 字段单独收口，免得 typecheck 棘轮因为新增属性访问而涨。
+        const hit = /** @type {{snippet?: string, matchKind?: string, messageCount?: number}} */ (result);
         view.close();
         // 搜索按发起搜索时的命名空间归属，且转发结果自带的全部会话元数据
         openSession({
           ...result,
           path: result.path,
           sessionId: result.sessionId,
+          // 定位用的三个量：原词、命中片段、命中类型。
+          // 宿主给了 snippet 却没给 messageId，长会话里只靠原词往往找不到（用户输的词可能只是
+          // 正文里一句话的一小段），snippet 是命中位置附近的正文原文，才是真正的锚点；
+          // matchKind 用来区分「标题命中」——那种情况正文里可能根本没有这个词，找不到时要退到
+          // 会话开头并给提示，而不是静默停在底部。
+          locateQuery: lastQuery,
+          locateSnippet: typeof hit.snippet === 'string' ? hit.snippet : '',
+          locateMatchKind:
+            hit.matchKind === 'title' || hit.matchKind === 'content' ? hit.matchKind : null,
+          // 会话总条数：定位靠它估「还要翻几页」，不传就只能按默认 5 页扫，
+          // 三千条的会话永远扫不到深处（真机验收就是这样误报「没找到」的）。
+          messageCount: Number.isFinite(hit.messageCount) ? hit.messageCount : null,
           title: result.title || result.sessionTitle || '会话',
           firstMessage: result.firstMessage,
           agentId: result.agentId || null,

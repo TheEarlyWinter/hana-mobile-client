@@ -17,6 +17,86 @@ import { splitUserContent, imagesFromAttachments } from './attach.js';
 import { parseReferenceBlocks } from './reference-block.js';
 import { belongsToSession, unwrapReplayEvent } from './protocol.js';
 import { fileUrlFor, resourceContentUrl } from './file-urls.js';
+import { createEchoGuard } from './echo-guard.js';
+
+/* 下面的 typedef 是注入的「袋子」的契约，按本文件实际读/写的字段收：
+ * 以前一律写成 @param {object}，于是 renderer.hasTurn() / state.session 这类调用只能报
+ * 「object 上没有这个属性」——分不出「真错」还是「没写类型」。
+ */
+
+/**
+ * 事件路由读写应用级状态（app.js 的 S）。
+ *
+ * turn 是 S 上的兼容 getter（见 app.js 的 S_RENDERER_VIEW）：实时轮根节点实际存在
+ * 渲染器私有状态里，这里只把它透传给 addTool。
+ *
+ * @typedef {object} RouterState
+ * @property {{sessionId?: string|null, path?: string|null, folder?: string|null}|null} session 当前会话；回列表/退出时为 null
+ *   folder 是副标题里的工作目录（context_usage 到达时重画副标题要用）
+ * @property {boolean} busy 是否在生成（重拉历史前要看它）
+ * @property {HTMLElement|null} [turn] 实时轮根节点（S 上的兼容 getter，见 app.js 的 S_RENDERER_VIEW；
+ *   没有活动轮时为 null，addTool 会自己退回渲染器私有 state 的默认值）
+ */
+
+/**
+ * chat-renderer 实例里事件路由用到的那几个方法。
+ *
+ * 方法体都交给渲染器，路由只管把事件形状化简成参数；所以 ev / args 这类宿主给的
+ * 结构只写 any（形状由宿主定，不是本模块的契约），但方法名与参数个数要写对。
+ *
+ * @typedef {object} RouterRenderer
+ * @property {() => void} clearPending
+ * @property {() => any} showPending
+ * @property {() => boolean} hasTurn 有没有活动轮
+ * @property {() => void} startAssistantTurn
+ * @property {(text: string, turn?: any, options?: any) => void} addAssistantText
+ * @property {(text: string, turn?: any) => void} addThinking
+ * @property {(name: string, turn?: any, toolState?: string, toolCallId?: any, args?: any) => any} addTool
+ * @property {(callId: any, ok?: boolean, meta?: any) => boolean} finishTool
+ * @property {(ev: any, options?: any) => void} appendCard
+ * @property {(files: Array<any>, host?: any) => boolean} appendFileCards
+ * @property {(text: string, images?: Array<any>, files?: Array<any>, ts?: number, references?: Array<any>) => any} appendUser
+ * @property {(text: string, isError?: boolean) => void} appendSystem
+ * @property {() => any} ensureMoodEl
+ * @property {(text: string, turn?: any) => void} appendMood
+ * @property {() => void} clearMood
+ * @property {() => void} paintCurrentMeta
+ * @property {() => void} markFirstToken
+ * @property {(n: number|string) => void} noteChars
+ * @property {() => void} markTurnEnd
+ * @property {() => void} finishTurn
+ * @property {() => void} endSegment 一段流结束（不是整轮）
+ * @property {() => void} endStaleStreamingTurns 把屏上残留的 streaming 收掉
+ */
+
+/**
+ * websocket-client 实例里事件路由用到的方法。
+ * @typedef {object} RouterSockets
+ * @property {() => void} requestContextUsage
+ */
+
+/**
+ * 流式游标（web/stream-state.js 的实例）。
+ * @typedef {object} RouterStreamState
+ * @property {(event: any) => void} observe
+ * @property {(envelope: any) => void} beginReplay
+ * @property {(seq: any) => boolean} acceptReplay
+ * @property {() => void} reset
+ */
+
+/**
+ * 卡片桥（web/card-bridge.js 的实例；可能还没建）。
+ * @typedef {object} RouterCardBridge
+ * @property {(ev: any) => void} [handleHostDataChanged] 全局卡数据变更广播
+ * @property {(ev: any) => Promise<any>} [handleHostConfirmation] 宿主工具权限确认
+ */
+
+/**
+ * 「刚发出去的那条」记账（web/echo-guard.js 的实例）。路由只负责核销。
+ * @typedef {object} RouterEchoGuard
+ * @property {(inputId: string) => boolean} takeEcho
+ * @property {(text: string) => boolean} matchesRecent
+ */
 
 /** 消息里引用的会话文件（sf_…）→ 资源内容地址。 */
 const resourceUrl = resourceContentUrl;
@@ -48,18 +128,18 @@ const RECONCILE_NEUTRAL_EVENTS = new Set([
 ]);
 
 /**
- * @param {object} options
- * @param {object} options.state 共享状态对象
- * @param {(id: string) => Element|null} options.getElement
- * @param {object} options.renderer chat-renderer 实例
- * @param {object} options.sockets websocket-client 实例
- * @param {object|null} options.cardBridge 卡片桥（可能还没建）
- * @param {object} options.streamState 流式游标
- * @param {(msg: string) => void} options.flash
- * @param {(busy: boolean) => void} options.setBusy
- * @param {() => void|Promise<void>} options.loadSessions
- * @param {() => Promise<void>} options.loadHistory
- * @param {(folder: string) => string} options.chatSubtitle
+ * @param {object} [options]
+ * @param {RouterState} [options.state] 共享状态对象（app.js 的 S）
+ * @param {(id: string) => HTMLElement|null} [options.getElement]
+ * @param {RouterRenderer} [options.renderer] chat-renderer 实例
+ * @param {RouterSockets} [options.sockets] websocket-client 实例
+ * @param {RouterCardBridge|null} [options.cardBridge] 卡片桥（可能还没建）
+ * @param {RouterStreamState} [options.streamState] 流式游标
+ * @param {(msg: string) => void} [options.flash]
+ * @param {(busy: boolean) => void} [options.setBusy]
+ * @param {() => void|Promise<void>} [options.loadSessions]
+ * @param {() => Promise<void>} [options.loadHistory]
+ * @param {(folder: string) => string} [options.chatSubtitle]
  * @param {((ev: object) => boolean)|null} [options.handleSubagentEvent]
  *   子代理（分身）的实时事件，装配时注入 subagent-view.js 的 handleEvent。
  *   路由只负责「把事件送到」，画法与状态都在被注入的模块里（相互不 import）。
@@ -71,15 +151,20 @@ const RECONCILE_NEUTRAL_EVENTS = new Set([
  * @param {(() => void)|null} [options.onSessionIdle]
  *   宿主确认「当前会话已经空闲」的旁路通知（整轮收尾，或没有活动轮但运行态已停）。
  *   与 onTurnEnd 分工：这里只表示可以对齐历史了，不依赖某个具体的结束事件，也不依赖
- *   state.turn 是否存在。装配层用它补历史；重复触发由消费方防抖合并。它抛错只记日志。
+ *   还有没有活动轮。装配层用它补历史；重复触发由消费方防抖合并。它抛错只记日志。
  * @param {((ev: object) => void)|null} [options.onFeedChanged]
  *   全局日报变更广播；必须先于无会话/归属过滤转发，不改变聊天流状态。
- * @param {((info: object) => void)|null} [options.onIdleReconcile]
+ * @param {((info: { activityToken: number }) => void)|null} [options.onIdleReconcile]
  *   前台恢复对账窗口到期时的旁路通知（窗口内一条事件都没收到、当前会话还在 busy）。
  *   装配层在这里绕过一次 history-pager 的 busy 门禁取最新一页，再自己判断要不要收尾；
  *   info.activityToken 是窗口到期时的事件计数，取历史期间又有事件进来就必须放弃。
  *   它抛错只记日志，不影响连接与渲染。
  * @param {number} [options.idleReconcileWindowMs] 对账窗口时长（默认 2000ms，理由见常量注释）
+ * @param {RouterEchoGuard|null} [options.echoGuard] 刚发出去的那条记在哪儿（与 composer 共用同一个实例，
+ *   见 web/echo-guard.js）；缺省按 state 自建一份，老单测直接预置 state.sentInputs 仍然有效
+ * @param {((pct: number|null) => void)|null} [options.setContextPercent]
+ *   上下文占用（%）的主人：副标题与数字都在注入方（app 传 conversation-controller 的
+ *   setContextPercent），路由只转达。不传就只重画副标题，不记数字。
  * @param {boolean} [options.debug]
  */
 export function createEventRouter({
@@ -100,9 +185,21 @@ export function createEventRouter({
   onFeedChanged = null,
   onIdleReconcile = null,
   idleReconcileWindowMs = DEFAULT_IDLE_RECONCILE_WINDOW_MS,
+  echoGuard = null,
+  setContextPercent = null,
   debug = false,
 } = {}) {
   if (!state) throw new TypeError('createEventRouter requires { state }');
+
+  // 发出去的那条记在这儿（composer 写、这里核销）。没注入就按 state 自建：
+  // 老单测直接构造 state 并预置 state.sentInputs，缺省这一份读写的就是它。
+  const echo = echoGuard || createEchoGuard(state);
+
+  /**
+   * 「已读回执」提示触发的历史重拉限频：两次之间至少隔 8 秒。
+   * 只本模块用，所以不再挂在 S 上。
+   */
+  let lastResyncAt = 0;
 
   /**
    * 断线回放的嵌套层数。回放里的历史事件不应当成「刚发出去」：
@@ -258,7 +355,7 @@ export function createEventRouter({
    */
   function completeIdleReconcile(token) {
     if (typeof token === 'number' && token !== sessionEventCount) return false;
-    if (state.turn) endTurn({ type: 'foreground_reconcile' }, { announce: false });
+    if (renderer.hasTurn()) endTurn({ type: 'foreground_reconcile' }, { announce: false });
     else finishIdleWithoutTurn({ announce: false });
     return true;
   }
@@ -330,7 +427,7 @@ export function createEventRouter({
    * 因此只认 runtimeIsStreaming：true 时这一轮还在生成，回放里与本状态冲突的整轮
    * 终态已经在回放时分流（只推进游标），这里必须把「正在生成」补回去：初始 idle
    * 的客户端不能停在 busy=false，否则随后的历史补拉会把正在生成的内容整页替换。
-   * false 时本轮还在（有 state.turn）就正常整轮收尾，没有本轮就只清残留与 busy。
+   * false 时本轮还在（renderer.hasTurn()）就正常整轮收尾，没有本轮就只清残留与 busy。
    * 两种都调度历史——恢复帧的 events 可以是空的，完整回复只能靠历史补回来。
    * 缺字段或非布尔时绝不推断完成，交回既有事件处理。
    */
@@ -341,7 +438,7 @@ export function createEventRouter({
       setBusy(true);
       return;
     }
-    if (state.turn) {
+    if (renderer.hasTurn()) {
       endTurn(ev);
       return;
     }
@@ -477,14 +574,13 @@ export function createEventRouter({
         const id = typeof ev.inputId === 'string' && ev.inputId
           ? ev.inputId
           : (typeof ev.clientMessageId === 'string' ? ev.clientMessageId : '');
-        if (id && state.sentInputs.has(id)) {
-          state.sentInputs.delete(id);
+        if (id && echo.takeEcho(id)) {
           // 自己发的消息会被这条回显吞掉（气泡在发送成功那一刻已经乐观画好了），
           // 但恰恰就是这种「刚发出去」的时刻最需要占位块：模型还没吐字。
           raisePending();
           return;
         }
-        if (!id && state.lastLocalUser && state.lastLocalUser.text === msgText && Date.now() - state.lastLocalUser.at < 5000) {
+        if (!id && echo.matchesRecent(msgText)) {
           raisePending();
           return;
         }
@@ -516,25 +612,25 @@ export function createEventRouter({
         const d = ev.delta ?? ev.text ?? ev.value ?? '';
         if (!d) return;
         setBusy(true);
-        if (!state.turn) renderer.startAssistantTurn();
+        if (!renderer.hasTurn()) renderer.startAssistantTurn();
         renderer.markFirstToken();
-        state.charCount += String(d).length;
+        renderer.noteChars(String(d).length);
         renderer.addAssistantText(d);
         return;
       }
       case 'thinking_start':
-        if (!state.turn) renderer.startAssistantTurn();
+        if (!renderer.hasTurn()) renderer.startAssistantTurn();
         return;
       case 'thinking_delta':
       case 'thinking': {
         const d = ev.delta ?? ev.text ?? ev.value ?? '';
         if (!d) return;
-        if (!state.turn) renderer.startAssistantTurn();
+        if (!renderer.hasTurn()) renderer.startAssistantTurn();
         renderer.addThinking(d);
         return;
       }
       case 'thinking_end':
-        if (state.turnMeta) renderer.paintMeta(state.turnMeta);
+        renderer.paintCurrentMeta();
         return;
       case 'mood_start':
         renderer.ensureMoodEl();
@@ -545,12 +641,11 @@ export function createEventRouter({
         return;
       }
       case 'mood_end':
-        state.moodEl = null;
-        state.moodRaw = '';
+        renderer.clearMood();
         return;
       case 'tool_start':
       case 'tool_call': {
-        if (!state.turn) renderer.startAssistantTurn();
+        if (!renderer.hasTurn()) renderer.startAssistantTurn();
         const callId = ev.toolCallId || ev.id;
         // args 是宿主白名单里的对象（command / file_path / url …），只用来把这一行写成
         // 「正在改 web/app.js」这样的人话。老形状把它叫 input；两者都没有就当空。
@@ -595,8 +690,8 @@ export function createEventRouter({
         if (ev.isStreaming === false) {
           // 有活轮才走完整收尾（通知 + 渲染器收尾）；没活轮就只把输入区放回可发送，
           // 顺手把历史里残留的 streaming 标记收掉（比如生成中途重载了 App）。
-          // 两种情况都说明宿主已空闲：历史必须在这之后补一次（等待首字时也没有 state.turn）。
-          if (state.turn) endTurn(ev);
+          // 两种情况都说明宿主已空闲：历史必须在这之后补一次（等待首字时也没有活动轮）。
+          if (renderer.hasTurn()) endTurn(ev);
           else finishIdleWithoutTurn();
           lastStatusWasStreaming = false;
           return;
@@ -604,7 +699,7 @@ export function createEventRouter({
         if (ev.isStreaming === true) {
           // 同一次回复里 isStreaming:true 会重复到达（segments/重放），
           // 只有「上一次不是 true」才当成新的一轮开头，否则会把一条回复撕成多条气泡。
-          if (state.turn && !lastStatusWasStreaming) endTurn(ev, { idle: false });
+          if (renderer.hasTurn() && !lastStatusWasStreaming) endTurn(ev, { idle: false });
           lastStatusWasStreaming = true;
           setBusy(true);
         }
@@ -619,7 +714,7 @@ export function createEventRouter({
         if (ev.isStreaming === true) {
           // 上一条流没收尾就开了新流（宿主没发 false、或上一轮中断）：先把旧的收了，
           // 否则两轮会并成一条气泡，计数与「正在进行」都会串。
-          if (state.turn) endTurn(ev, { idle: false });
+          if (renderer.hasTurn()) endTurn(ev, { idle: false });
           setBusy(true);
         }
         return;
@@ -670,8 +765,8 @@ export function createEventRouter({
         // 老会话可能拿不到用量，服务端会发 percent: null。
         // 以前用 Number(null) 就变成 0，界面就硬写着「上下文 0%」。未知就是未知。
         if (ev.sessionPath && state.session?.path && ev.sessionPath !== state.session.path) return;
-        const pct = ev.percent;
-        state.ctxPct = typeof pct === 'number' && Number.isFinite(pct) ? Math.round(pct) : null;
+        // 数字存在副标题的家里（conversation-controller）：这里只转达，不自己留一份。
+        if (typeof setContextPercent === 'function') setContextPercent(ev.percent);
         getElement('chatSub').textContent = chatSubtitle(state.session?.folder);
         return;
       }
@@ -685,8 +780,8 @@ export function createEventRouter({
         // 对我们而言只需要重拉一遍历史，不是错误——弹成红条只会让每次重连多一行英文。
         if (ev.code === 'session_output_receipt_required') {
           const now = Date.now();
-          if (!state.busy && state.session?.path && now - (state.lastResyncAt || 0) > 8000) {
-            state.lastResyncAt = now;
+          if (!state.busy && state.session?.path && now - lastResyncAt > 8000) {
+            lastResyncAt = now;
             loadHistory().catch(() => {});
           }
           return;

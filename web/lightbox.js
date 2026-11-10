@@ -132,7 +132,7 @@ function setAttrs(node, attrs) {
  * @param {Element} [options.mount] 灯箱挂载点，默认 doc.body
  * @param {() => void} [options.onClose] 关闭回调（每次关闭恰好一次；重开时另一组图不回调）
  * @param {EventTarget} [options.keyTarget] 键盘监听挂点，默认 doc
- * @param {Window} [options.win] 量视口 / 挂 resize 用，默认 globalThis
+ * @param {Window|typeof globalThis} [options.win] 量视口 / 挂 resize 用，默认 globalThis
  * @param {{setTimeout: Function, clearTimeout: Function}} [options.timers] 单击关闭的延迟定时器
  * @param {() => number} [options.now] 时间源（双击判定）
  * @param {number} [options.threshold] 覆盖默认的拖动阈值（px）

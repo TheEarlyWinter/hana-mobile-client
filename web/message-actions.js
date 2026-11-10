@@ -125,6 +125,17 @@ function isLastMessage(message, context, role) {
   return String(lastId) === String(message.id);
 }
 
+/**
+ * 造一条菜单项。
+ *
+ * options 的类型必须写成 JSDoc 参数块：available 是无默认值的解构绑定，tsc 推 JS 形参时
+ * 只留下有默认值的几个（hidden/plan/reason/reasonCode），底下各条规则里的 available: true
+ * 就全成了多余属性。
+ *
+ * @param {'copy'|'quote'|'retry'|'replay'|'edit-resend'} id 与外层 actionsForMessage 声明的五个入口对齐
+ * @param {string} label
+ * @param {{ available?: boolean, hidden?: boolean, reason?: string, reasonCode?: any, plan?: any }} [options]
+ */
 function makeAction(id, label, { available, hidden = false, reason = '', reasonCode = null, plan = null } = {}) {
   const enabled = Boolean(available) && !hidden;
   return {
@@ -461,8 +472,8 @@ export async function runMessageAction(action, adapters = {}) {
  * 不读取、不改写入参消息节点。open() 自己计算 actionsForMessage，hidden
  * 为 true 的操作不画；不可用的操作画出来但不可点，并显示原因。
  *
- * @param {object} options
- * @param {Element} options.mount 菜单挂载容器（必须支持 appendChild）
+ * @param {object} [options]
+ * @param {Element} [options.mount] 菜单挂载容器（必须支持 appendChild）
  * @param {(payload: {action: object, message: object, context: object}) => any} [options.onRun]
  * @param {(err: Error) => void} [options.onError] onRun 同步抛错或异步 reject 时调用
  * @param {Document} [options.document]

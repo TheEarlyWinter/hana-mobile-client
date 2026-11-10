@@ -12,8 +12,8 @@
  */
 
 /**
- * @param {object} options
- * @param {Document} options.document - DOM 工厂，杜绝全局隐式读取
+ * @param {object} [options]
+ * @param {Document} [options.document] - DOM 工厂，杜绝全局隐式读取
  * @param {(namespace: 'home'|'code') => void} [options.onChange] - 点击回传
  * @returns {{ setNamespace: (namespace: string) => void, dispose: () => void }}
  */
@@ -24,6 +24,9 @@ export function createSessionNamespaceTabs({ document: doc, onChange = () => {} 
 
   // 老测试夹具没有 getElementById，缺节点时整体退化为 no-op。
   const byId = (id) => (typeof doc.getElementById === 'function' ? doc.getElementById(id) : null);
+  // 不写注解时元素会被推成「string 与节点的联合」，下面 onChange(namespace) 就对不上
+  // 只收 'home' | 'code' 的回调。
+  /** @type {Array<['home' | 'code', Element | null]>} */
   const buttons = [
     ['home', byId('btnNamespaceHome')],
     ['code', byId('btnNamespaceCode')],

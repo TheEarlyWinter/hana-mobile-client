@@ -11,10 +11,18 @@
  *   左侧正文 → 预览（file-preview.js）
  *   右侧箭头 → 下载（href 由调用方解析，晚到也能补上）
  *
+ * 左侧图标槽里放缩略图还是扩展名缩写，只看条目有没有真实路径：
+ *   有 filePath 的图片 → `/gw/file/<b64url(path)>`（正文图片用的同一条路由，真机 200）；
+ *   只有 fileId      → 扩展名徽标，**一个请求也不发**。
+ * 这条分界是缺陷 H6e 的修法（a）：卡片不能再拿 fileId 去猜
+ * `/api/resources/<fileId>/content`，宿主对 agent 生成/外部存储的文件在那条上回 400，
+ * 而卡片是没人点也会自己渲染的东西，不能靠“大概率能读”去刷控制台。
+ *
  * 本模块只管「一份文件描述 → 一个 DOM 卡片」，不碰网络也不读写全局状态。
  */
 
 import { formatBytes } from './attach.js';
+import { thumbUrlFor } from './file-urls.js';
 
 /* 扩展名 → 人话。没有的就不显示类型，不硬编「未知文件」。 */
 const TYPE_LABEL = {
@@ -52,6 +60,30 @@ export function fileMetaText(file) {
   return parts.join(' · ');
 }
 
+/** 图标槽里放扩展名缩写（没有缩略图时的默认样子）。 */
+function paintExtBadge(icon, ext) {
+  // 有扩展名就把缩写在图标里写出来，比一个通用文档图标好认
+  icon.textContent = ext ? ext.slice(0, 4).toUpperCase() : '?';
+}
+
+/** 图标槽里放缩略图。地址来自真实路径，不可能是宿主的资源地址（见 file-urls.js）。 */
+function paintThumb(icon, src, ext) {
+  const img = document.createElement('img');
+  img.className = 'file-card-thumb';
+  img.src = src;
+  img.alt = '';
+  img.setAttribute('aria-hidden', 'true');
+  // 图标槽本身是 32×32 + overflow:hidden（style.css 的 .file-card-icon），
+  // 这里把图撑满再裁齐；样式表不在本次改动范围，所以尺寸走内联。
+  img.style.width = '100%';
+  img.style.height = '100%';
+  img.style.objectFit = 'cover';
+  img.style.display = 'block';
+  // 文件被删或网关拒绝时 <img> 只会静默失败（既没图也没提示）：换回扩展名徽标，不把破图留在卡片上。
+  img.addEventListener('error', () => paintExtBadge(icon, ext));
+  icon.appendChild(img);
+}
+
 /**
  * 一份文件 → 一张卡片。
  *
@@ -59,6 +91,7 @@ export function fileMetaText(file) {
  * @param {object} opts
  * @param {string} [opts.href]    下载地址；没有就先不显示下载按钮
  * @param {Function} [opts.onOpen] 点卡片正文时的回调（打开预览）
+ * @param {Function} [opts.onDownload] 点下载按钮时的回调；不传就退回 href 直接跳转
  */
 export function renderFileCard(file, { href = null, onOpen = null, onDownload = null } = {}) {
   const label = String(file?.label || file?.filename || '未命名文件');
@@ -70,8 +103,11 @@ export function renderFileCard(file, { href = null, onOpen = null, onDownload = 
 
   const icon = document.createElement('span');
   icon.className = 'file-card-icon';
-  // 有扩展名就把缩写在图标里写出来，比一个通用文档图标好认
-  icon.textContent = ext ? ext.slice(0, 4).toUpperCase() : '?';
+  // 缩略图只从真实路径来：条目只有 fileId 时 thumbUrlFor 返回 null，直接画徽标。
+  // 不能退到 /api/resources/<fileId>/content —— 那是 H6e 的 400 源头，理由见 file-urls.js。
+  const thumbSrc = thumbUrlFor(file);
+  if (thumbSrc) paintThumb(icon, thumbSrc, ext);
+  else paintExtBadge(icon, ext);
   card.appendChild(icon);
 
   const main = document.createElement('button');

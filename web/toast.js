@@ -7,7 +7,7 @@
  * 一行都不用改。
  *
  * 契约：
- *   createToaster({ doc, mount, now }) -> { show(text, opts), clear(), dispose() }
+ *   createToaster({ doc, mount, now }) -> { show(text, opts), dismiss(id), clear(), dispose() }
  *   show(text, { level = 'error', detail = '' })
  *
  * 行为：
@@ -45,7 +45,7 @@ const DETAIL_TRUNCATED_SUFFIX = '\n…（详情过长，已截断）';
  * @param {Document} [options.doc] 宿主 document
  * @param {Element} [options.mount] 挂载点，默认 doc.body
  * @param {() => number} [options.now] 取当前时间（合并窗口与计时都走它）
- * @returns {{ show: Function, clear: Function, dispose: Function }}
+ * @returns {{ show: Function, dismiss: Function, clear: Function, dispose: Function }}
  */
 export function createToaster({ doc = globalThis.document, mount = null, now = () => Date.now() } = {}) {
   const host = mount || (doc && doc.body) || null;
@@ -406,6 +406,19 @@ export function createToaster({ doc = globalThis.document, mount = null, now = (
     pruneDetached();
   }
 
+  /**
+   * 关掉指定那一条（按 show 返回的 id）。
+   *
+   * 给「先报错、后恢复」的场景用：错误提示常驻是故意的，但状态真恢复了就得把旧话收掉，
+   * 否则屏幕上同时写着「没加载成功」和「已重新加载」。id 已关或不存在时什么事都不做。
+   */
+  function dismiss(id) {
+    const rec = records.find((item) => item.id === id);
+    if (!rec) return;
+    close(rec);
+    syncRoot();
+  }
+
   /** 销毁实例：清计时器、摘掉整棵提示树，之后 show / clear 都不再碰 DOM。 */
   function dispose() {
     if (disposed) return;
@@ -419,5 +432,5 @@ export function createToaster({ doc = globalThis.document, mount = null, now = (
     root = null;
   }
 
-  return { show, clear, dispose };
+  return { show, dismiss, clear, dispose };
 }

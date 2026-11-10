@@ -227,10 +227,12 @@ function specOf(block) {
 /**
  * 子代理卡片视图。
  *
- * @param {object} options
- * @param {Document} options.document 注入的 document（不读全局）
- * @param {(target: {taskId: string, sessionId: string|null, sessionPath: string|null}) => void} [options.onOpenSession]
+ * @param {object} [options]
+ * @param {Document} [options.document] 注入的 document（不读全局）
+ * @param {(target: {taskId: string, sessionId: string|null, sessionPath: string|null, name?: string, label?: string|null, model?: string|null, agentId?: string|null, status?: string, task?: string|null}) => void} [options.onOpenSession]
  *   点卡片时的回调：由装配方决定「打开子会话预览」怎么做；没给就只是不可点。
+ *   target 里的 name / label / model / agentId / status / task 是卡片这一层已经算好的身份，
+ *   一并交出去，免得装配方再猜一次宿主字段。
  * @param {(id: string) => (string|null)} [options.avatarUrlById]
  *   按 agent id 取头像地址。**不给就维持旧样**（一个「分」徽标，不出头像）；
  *   给了但返回 null/空串，这张卡就画名字首字的占位圆。回调抛错按「没有头像」处理。

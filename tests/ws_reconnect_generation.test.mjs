@@ -32,6 +32,8 @@ h.setFetch(async (url) => {
 
 const hana = await h.loadApp();
 const S = hana.S;
+/* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+const R = hana?.rendererState || globalThis.__hana.rendererState;
 await h.waitFor(() => S.currentAgent, 'boot 完成');
 
 const lastSocket = () => h.MockWebSocket.instances.at(-1);
@@ -90,7 +92,7 @@ await t('旧连接的迟到消息不处理，新连接的消息照常处理', as
   S.session = { path: 'p-ev', sessionId: 's-ev', title: '事件隔离' };
   h.getEl('transcript').innerHTML = '';
   S.busy = false;
-  S.turn = null;
+  R.turn = null;
 
   hana.connectWS();
   const wsA = lastSocket();
@@ -112,7 +114,7 @@ await t('旧连接的迟到消息不处理，新连接的消息照常处理', as
   assert.equal(S.busy, true, '当前连接的事件必须正常处理');
   assert.ok(transcriptText().includes('正常内容'), '当前连接的消息应渲染出来');
   S.busy = false;
-  S.turn = null;
+  R.turn = null;
 });
 
 await t('旧连接的 error 不能把新连接标成断线', async () => {

@@ -160,11 +160,11 @@ let instanceSeq = 0;
 /**
  * 造一个只读的仓库现状面板。
  *
- * @param {object} options
+ * @param {object} [options]
  * @param {Document} [options.doc] 默认 globalThis.document
  * @param {Element} [options.mount] 挂载容器，默认 doc.body
- * @param {(pathname: string) => Promise<any>} options.api 同源 JSON 客户端（app.js 里的 api）
- * @param {() => ({cwd?: string, sessionId?: string}|null)} options.getSession 当前会话
+ * @param {(pathname: string) => Promise<any>} [options.api] 同源 JSON 客户端（app.js 里的 api）
+ * @param {() => ({cwd?: string, sessionId?: string}|null)} [options.getSession] 当前会话
  * @returns {{open: Function, close: Function, isOpen: Function}}
  */
 export function createCodePanel({

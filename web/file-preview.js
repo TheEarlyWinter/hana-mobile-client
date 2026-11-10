@@ -185,7 +185,7 @@ function fallbackNotice(message, label, downloadUrl) {
  *
  * @param {object} opts
  * @param {object} opts.file       { label, ext, size }
- * @param {string} opts.readUrl    读取用的同源地址（必填，没有就不应调本函数）
+ * @param {string} opts.readUrl    读取用的同源地址；空/缺失时只给一句提示，不发任何请求
  * @param {string|null} [opts.downloadUrl] 下载用的白名单地址
  * @param {(md: string) => string} [opts.renderMarkdown]
  */
@@ -206,6 +206,14 @@ export async function openFilePreview({ file, readUrl, downloadUrl = null, rende
   loading.className = 'file-preview-loading';
   loading.textContent = '正在打开…';
   setBody(loading);
+
+  // 地址为空就没什么可发的：以前图片分支会 `img.src = null`（真浏览器里变成一次对 “null” 的请求，
+  // 必然失败还应答不了），文本分支会 fetch 空串。这里提前收口：不发请求，直接给人话和下载入口。
+  const readTarget = typeof readUrl === 'string' ? readUrl.trim() : '';
+  if (!readTarget) {
+    setBody(fallbackNotice('这个文件暂时拿不到可读地址，先下载到本地再看。', label, downloadUrl));
+    return;
+  }
 
   try {
     if (kind === 'image') {

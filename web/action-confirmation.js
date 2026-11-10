@@ -41,7 +41,7 @@ function formatDetails(details) {
  * @param {Document} [options.document] 宿主 DOM Document 对象
  * @param {number} [options.maxQueueSize] 最大排队上限，默认 10
  * @param {number} [options.timeoutMs] 单次确认超时毫秒数，默认 0（不自动超时）
- * @returns {object} 控制器接口
+ * @returns {{ confirm: (opts?: { title?: string, message?: string, details?: any }) => Promise<boolean>, close: () => void, cancelAll: () => void, isOpen: () => boolean, destroy: () => void }} 控制器接口
  */
 export function createActionConfirmation({
   document: doc = globalThis.document,
@@ -234,9 +234,9 @@ export function createActionConfirmation({
 
   /**
    * 唤起操作确认
-   * @param {object} params
-   * @param {string} params.title 标题
-   * @param {string} params.message 提示消息
+   * @param {object} [params]
+   * @param {string} [params.title] 标题
+   * @param {string} [params.message] 提示消息
    * @param {any} [params.details] 详细参数信息
    * @returns {Promise<boolean>}
    */

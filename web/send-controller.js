@@ -103,19 +103,24 @@ export function createSendController({
     try {
       onSendingChange(true);
 
-      if (!(await waitForReady())) {
+      // 等的不是「连上」，是「连上之后还是这个会话」。切走要能立刻结束等待：
+      // 单飞锁在下面的 finally 里，多等一轮就多锁 60ms，最坏锁满整个超时。
+      // 同一个 session 对象也可能被原地改写 path/sessionId，所以三个身份项都要看。
+      const sessionChanged = () => {
+        const live = readSession();
+        return live !== session || live?.path !== sessionPath || live?.sessionId !== sessionId;
+      };
+      // 第一个参数留空 = 用等待方默认的超时；第二个才是取消条件。
+      // 不能用 ready / connected 这类名字：上面的 ready 是「已就绪的附件」。
+      const becameReady = await waitForReady(undefined, sessionChanged);
+      // 切会话 / 退出：这次发送已经不属于当前界面，静默收摊——不报 not-ready，
+      // 那不是连接故障。取消等待也不能退化成继续发帧。
+      if (sessionChanged()) return prepared ? result : undefined;
+      if (!becameReady) {
         report({ code: 'not-ready' });
         return prepared ? failPrepared(new Error('连接还没就绪，消息没发出去')) : undefined;
       }
 
-      const currentSession = readSession();
-      if (
-        currentSession !== session ||
-        currentSession?.path !== sessionPath ||
-        currentSession?.sessionId !== sessionId
-      ) {
-        return prepared ? result : undefined;
-      }
       // prepared 的归属闭包必须覆盖 WS 等待期内的切会话和“切走再回来”。
       // 检查紧贴写帧路径，不能因同一个 session 对象又回到当前而放行。
       if (prepared && typeof isCurrent === 'function' && !isCurrent()) return result;

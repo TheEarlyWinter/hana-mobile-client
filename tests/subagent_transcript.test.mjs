@@ -20,6 +20,7 @@
 
 import assert from 'node:assert/strict';
 import { toTimeline } from '../web/subagent-transcript.js';
+import { prettyToolName } from '../web/tool-line.js';
 
 let bad = 0;
 function t(name, fn) {
@@ -211,6 +212,32 @@ t('工具名削掉 app__ 前缀与调用 hash', () => {
   ]);
   assert.equal(out.steps[0].title, 'twinkstar web access', '前缀与 hash 不该露给用户');
   assert.equal(out.steps[0].meta, 'https://example.com/a');
+});
+
+t('工具标题与 web/tool-line.js 的 prettyToolName 同一份实现', () => {
+  // 以前这里有一份逐字拄的 shortToolName；合并后标题必须与工具行完全一致，
+  // 谁再私自复制一份、改了一个正则，这条先红。
+  const names = [
+    'read',
+    'exec_command',
+    'readFile',
+    'current_status',
+    'mcp__fs__fs',
+    'tool_name__tool_name',
+    'app__twinkstar_web_access__twinkstar_web_access_bro_006a28b90908',
+    'read_006a28b90908',
+  ];
+  for (const name of names) {
+    const out = toTimeline([toolCall(name, { path: 'a' }, 'call_1', 2)]);
+    assert.equal(out.steps[0].title, prettyToolName(name), `改名规则必须与工具行共用：${name}`);
+  }
+});
+
+t('工具名进来前已经 trim：首尾空白的兜底值也归到同一个标题', () => {
+  // firstText 只认字符串并 trim，所以 prettyToolName 那条「削干净了就把原值（未 trim）
+  // 退回」的分支在时间轴里走不到。这条把前提钉住：去掉 firstText 就会红。
+  const out = toTimeline([toolCall('  __  ', { path: 'a' }, 'call_1', 2)]);
+  assert.equal(out.steps[0].title, '__');
 });
 
 t('老形状：参数键是 input / args 也能取到', () => {

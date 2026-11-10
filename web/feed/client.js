@@ -257,8 +257,8 @@ function annotateHttpError(err) {
 }
 
 /**
- * @param {object} options
- * @param {(pathname: string, init?: object) => Promise<any>} options.api 现有 web/http-client.js 客户端
+ * @param {object} [options]
+ * @param {(pathname: string, init?: object) => Promise<any>} [options.api] 现有 web/http-client.js 客户端
  */
 export function createFeedClient({ api } = {}) {
   if (typeof api !== 'function') throw new TypeError('createFeedClient 需要 api 函数');

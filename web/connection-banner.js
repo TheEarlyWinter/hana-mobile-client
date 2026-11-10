@@ -37,8 +37,8 @@ function delayOf(value, fallback) {
 }
 
 /**
- * @param {object} options
- * @param {Document} options.doc DOM 工厂，杜绝全局隐式读取
+ * @param {object} [options]
+ * @param {Document} [options.doc] DOM 工厂，杜绝全局隐式读取
  * @param {HTMLElement} [options.mount] 挂载点，默认 doc.body（细条是 fixed 定位，挂哪都不影响布局）
  * @param {() => number} [options.now] 取当前时间（毫秒）；用来复核定时器是否真的等够了
  * @param {number|{show?: number, hide?: number}} [options.delayMs]

@@ -46,10 +46,10 @@ function taskStateLabel(state) {
 }
 
 /**
- * @param {object} options
+ * @param {object} [options]
  * @param {Document} [options.document]
  * @param {(action: FeedViewAction) => void} [options.onAction]
- * @param {(item: import('./client.js').FeedItem, context: {slateId:string|null, position:number, mode?:'list'|'reader'}) => Node} options.renderCard
+ * @param {(item: import('./client.js').FeedItem, context: {slateId:string|null, position:number, mode?:'list'|'reader'}) => Node} [options.renderCard]
  * @param {(node: Node) => void} [options.releaseCard]
  */
 export function createFeedView({

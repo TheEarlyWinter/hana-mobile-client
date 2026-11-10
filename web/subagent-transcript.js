@@ -27,6 +27,7 @@
 
 import { contentBlocks } from './protocol.js';
 import { describeToolOp } from './tool-ops.js';
+import { prettyToolName } from './tool-line.js';
 
 /** 默认上限。超过就掐中间——用户要看的是开头与结尾，不是第 87 次 read。 */
 const DEFAULT_MAX_STEPS = 200;
@@ -90,27 +91,6 @@ function firstValue(...values) {
     if (value !== null && value !== undefined) return value;
   }
   return null;
-}
-
-/**
- * 工具名 → 短名（`read`、`rg`、`exec command`）。
- *
- * 规则与 web/chat-renderer.js 的 prettyToolName 逐条一致（那个函数在闭包里没导出，
- * 这里保留一份）：削 `app__`/`mcp__` 前缀、尾部调用 hash、`_bro` 尾巴，再把
- * `A__A` 这种重复分段去重。名字只用于标题，绝不用来判 kind。
- */
-function shortToolName(raw) {
-  let s = trimText(raw) || 'tool';
-  s = s.replace(/^(app|mcp|plugin)__/, '');
-  s = s.replace(/[_-][0-9a-f]{6,}$/i, '');   // 尾部调用 id
-  s = s.replace(/[_-]bro$/i, '');
-  // 首段限定成「不含分隔符」才是线性的；允许含分隔符的回退会被长串重复字符拖死。
-  const dup = s.match(/^([^ _-]{1,64})[ _-]\1$/);
-  if (dup) s = dup[1];
-  const parts = s.split('__').map((p) => p.replace(/[_-]+/g, ' ').trim()).filter(Boolean);
-  const uniq = parts.filter((part, index) => part !== parts[index - 1]);
-  s = uniq.join(' ').replace(/\s+/g, ' ').trim();
-  return s || trimText(raw) || 'tool';
 }
 
 /**
@@ -240,12 +220,19 @@ function addThink(ctx, block) {
  * 带 arguments 的块丢掉参数摘要。
  */
 function addToolCall(ctx, block) {
+  // 标题统一用 web/tool-line.js 的 prettyToolName（工具行与子代理时间轴共一份显示名）。
+  // 两处 fallback 的细微差异在这里**走不到**，所以合并不改变输出：
+  //   1) prettyToolName 对非字符串会先 String() 化，旧副本只认字符串——name 已经过
+  //      firstText（只取字符串并 trim）且兜底 'tool'，进来的一定是非空字符串；
+  //   2) prettyToolName 最后一级 fallback 返回未 trim 的原值，旧副本返回 trim 过的——
+  //      同样因为这个理由，原值本来就不带首尾空白。
+  // 跟着改的代价是：以后若想直接拿宿主原值进来，先想清楚这两条。
   const name = firstText(block.name, block.toolName, block.tool && block.tool.name) || 'tool';
   const args = firstValue(block.arguments, block.input, block.args);
   const callId = firstText(block.id, block.toolCallId, block.callId);
   const step = pushStep(ctx, {
     kind: 'tool',
-    title: shortToolName(name),
+    title: prettyToolName(name),
     meta: toolMeta(name, args),
     text: '',
     status: 'ok',

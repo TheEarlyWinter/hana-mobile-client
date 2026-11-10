@@ -293,6 +293,59 @@ await t('切助手时旧助手的 summary 迟到返回不得覆盖新助手的�
   assert.equal(dot.textContent, '4');
 });
 
+/* ---- 重连对账与草稿清理（装配层） ---- */
+
+const prevFetch = h.fetchHandler;
+let agent2Entries = 0;
+h.setFetch(async (url, init = {}) => {
+  if (String(url).split('?')[0] === '/api/casual/agent-2/entries') agent2Entries += 1;
+  return prevFetch(url, init);
+});
+
+await t('WS 连上（重连）后立刻对一次账，不用等 30 秒兜底轮询', async () => {
+  // 当前助手是 agent-2（上一条用例切过来的）。
+  nodeById('btnCasual').dispatchEvent('click');
+  const root = nodeByClass('casual-view');
+  await h.waitFor(() => root.hidden === false, '面板应打开');
+  await h.waitFor(() => agent2Entries > 0, '首屏应拉一次条目');
+  await h.waitFor(() => h.findAll(root, '.casual-row').length > 0, '首屏应渲染出条目');
+
+  // WS 连着时轮询间隔是 30 秒（casual_store 的 setPollMs 用例盯着），
+  // 所以 800ms 内出现的条目请求只可能来自 ready 后的主动对账。
+  const before = agent2Entries;
+  hana.casual.setSocketLive(true);
+  await h.waitFor(() => agent2Entries > before, 'ready 之后必须立刻补一次对账', 800);
+});
+
+await t('切助手会清空输入框里的草稿，旧草稿不带给新助手', async () => {
+  const root = nodeByClass('casual-view');
+  if (root.hidden) nodeById('btnCasual').dispatchEvent('click');
+  await h.waitFor(() => root.hidden === false, '面板应打开');
+
+  const input = root.querySelector('.casual-input');
+  assert.ok(input, '应有输入框');
+  input.value = '写了一半的话';
+
+  hana.casual.setAgent();
+
+  assert.equal(input.value, '', '切助手后草稿必须清空');
+  assert.equal(root.hidden, true, '切助手应把面板收起来');
+});
+
+await t('登出 reset 也会清空输入框里的草稿', async () => {
+  const root = nodeByClass('casual-view');
+  if (root.hidden) nodeById('btnCasual').dispatchEvent('click');
+  await h.waitFor(() => root.hidden === false, '面板应打开');
+
+  const input = root.querySelector('.casual-input');
+  input.value = '登出前的草稿';
+
+  hana.casual.reset();
+
+  assert.equal(input.value, '', '登出后草稿必须清空');
+  assert.equal(input.value === '' && root.hidden === true, true, 'reset 应同时关掉面板');
+});
+
 console.log(bad === 0 ? '\nALL PASS' : `\n${bad} FAILED`);
 process.exit(bad === 0 ? 0 : 1);
 

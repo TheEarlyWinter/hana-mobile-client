@@ -238,6 +238,65 @@ await t('轮询合并新条目、去重、更新未读与 typing，并继续排�
   assert.equal(clock.size(), 1, '每轮结束都要排下一轮');
 });
 
+/* ---- 2b. 在途摘要不得覆盖更新的本地状态 ---- */
+
+await t('在途轮询的旧摘要不能盖掉期间到达的 WS unread', async () => {
+  const clock = createClock();
+  const client = createFakeClient({ summary: summary1, page: page1 });
+  const { store } = createStore(client, clock);
+  await store.open();
+  assert.equal(store.getState().unread, 2);
+
+  // 下一轮轮询的 summary 卡在网络上
+  const gate = deferred();
+  client.summary = () => gate.promise;
+  const polling = clock.tick();
+  await tick();
+  assert.equal(client.summaryCalls, 2, '轮询已经发出了 summary 请求');
+
+  // 请求在途时 WS 推来更新的未读：推送带的是此刻的真值
+  assert.equal(
+    store.applyEvent({ type: 'casual_unread', agentId: 'agent-1', unread: 5, preview: { text: '新消息' } }),
+    true,
+  );
+  assert.equal(store.getState().unread, 5);
+
+  // 旧摘要带着它发起时的 unread=9 回来
+  gate.resolve({ preview: { text: '旧预览' }, unread: 9 });
+  await polling;
+
+  const snap = store.getState();
+  assert.equal(snap.unread, 5, '旧摘要不得盖掉期间到达的推送');
+  assert.deepEqual(snap.preview, { text: '新消息' }, '预览也不能倒退');
+  store.close();
+});
+
+await t('手动 refresh 的在途旧摘要不能把本地已读的未读顶回来', async () => {
+  const clock = createClock();
+  const client = createFakeClient({ summary: summary1, page: page1 });
+  const { store } = createStore(client, clock);
+  await store.open();
+
+  const gate = deferred();
+  client.summary = () => gate.promise;
+  const refreshing = store.refresh();
+  await tick();
+  assert.equal(store.getState().loading, true);
+
+  // 摘要卡住的时候用户把最新一条读掉了：本地已清零
+  assert.equal(await store.markReadThrough('e2'), true);
+  assert.equal(store.getState().unread, 0);
+
+  gate.resolve({ preview: { text: '在吗' }, unread: 6 });
+  assert.equal(await refreshing, true);
+
+  const snap = store.getState();
+  assert.equal(snap.unread, 0, '在途摘要不得把已读清零顶回去');
+  // 整份摘要都被丢掉（不只 unread）：宁可这一轮不更新，也不要「新未读 + 旧预览」的错配。
+  assert.deepEqual(snap.preview, summary1.preview, '预览也停在本地已知的最新值');
+  store.close();
+});
+
 /* ---- 3. 乐观发送 ---- */
 
 await t('乐观发送：先插本地 pending 条目，成功后按 clientMessageId 与回显对账', async () => {
@@ -1109,6 +1168,43 @@ await t('reset 后等待 A 的 B（A 成功）不得用新身份发请求或污�
 
 await t('reset 后等待 A 的 B（A 失败）不得用新身份发请求或污染新状态', async () => {
   await queuedReadAfterReset({ aFails: true });
+});
+
+await t('回执不带 clientMessageId 时，本地乐观条目也不能和服务端那份并存（不出现双气泡）', async () => {
+  const clock = createClock();
+  const client = createFakeClient({
+    summary: { preview: null, unread: 0 },
+    page: { entries: [], hasMore: false, typing: false },
+  });
+  const { store } = createStore(client, clock);
+  await store.open();
+
+  const gate = deferred();
+  client.onSend = () => gate.promise;
+  const sending = store.send('收到吗');
+
+  // 宿主回执：带了 entryId，但条目里没有 clientMessageId（真实宿主并不保证带）。
+  gate.resolve({
+    entryId: 'srv-9',
+    entries: [
+      serverEntry({
+        id: 'srv-9',
+        sourceEntryId: 'src-9',
+        actor: 'user',
+        occurredAt: '2026-11-04T05:00:00.000Z',
+        item: { kind: 'text', text: '收到吗' },
+      }),
+    ],
+    reset: false,
+  });
+
+  const result = await sending;
+  assert.equal(result.ok, true);
+
+  const snap = store.getState();
+  assert.equal(snap.entries.length, 1, '同一条消息只能留一份，不能乐观条目 + 服务端条目各一条');
+  assert.equal(snap.entries[0].id, 'srv-9', '留下的应该是服务端那份');
+  assert.equal(snap.entries[0].local, undefined, '不应残留本地乐观标记');
 });
 
 console.log(bad === 0 ? '\nALL PASS' : `\n${bad} FAILED`);

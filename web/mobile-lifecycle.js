@@ -13,22 +13,22 @@
  */
 
 /**
- * @param {object} options
- * @param {object} options.state 共享状态对象
- * @param {Document} options.document
- * @param {Window} options.window
- * @param {(id: string) => Element|null} options.getElement
- * @param {object} options.renderer chat-renderer 实例
- * @param {() => void} options.connectWS 重连（app 的薄入口）
+ * @param {object} [options]
+ * @param {object} [options.state] 共享状态对象
+ * @param {Document} [options.document]
+ * @param {Window} [options.window]
+ * @param {(id: string) => Element|null} [options.getElement]
+ * @param {object} [options.renderer] chat-renderer 实例
+ * @param {() => void} [options.connectWS] 重连（app 的薄入口）
  * @param {(() => void)|null} [options.onForegroundResume]
  *   前台恢复真的跑起来（重连已发起）之后通知一次装配层。app 用它开一个短的对账窗口，
  *   等一段时间看有没有任何事件到来；本模块只管「什么时候」，判断与收尾不在这一层。
  * @param {(() => void)|null} [options.onForegroundSuspend]
  *   进后台 / 失焦 / 文档卸载时通知：前台恢复与它的对账窗口一起作废。
- * @param {object|null} options.actionConfirmation
- * @param {object} options.sessionListController
- * @param {object} options.namespaceTabs
- * @param {string} options.probeBuild 布局探针的构建标记
+ * @param {object|null} [options.actionConfirmation]
+ * @param {object} [options.sessionListController]
+ * @param {object} [options.namespaceTabs]
+ * @param {string} [options.probeBuild] 布局探针的构建标记
  * @param {string} [options.probeModuleUrl] 探针要报告的入口脚本 URL（默认本模块）
  * @param {boolean} [options.debug]
  */

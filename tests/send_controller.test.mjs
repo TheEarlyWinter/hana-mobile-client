@@ -39,9 +39,10 @@ function harness(options = {}) {
   const controller = createSendController({
     readDraft: () => { calls.reads += 1; return state.draft; },
     readSession: () => state.session,
-    waitForReady: () => {
+    // 与真实 waitForReady(timeoutMs, shouldCancel) 同形：第一个参数是超时，取消条件是第二个。
+    waitForReady: (timeoutMs, shouldCancel) => {
       calls.waits += 1;
-      return options.waitForReady ? options.waitForReady() : Promise.resolve(true);
+      return options.waitForReady ? options.waitForReady(shouldCancel) : Promise.resolve(true);
     },
     sendFrame: (frame) => {
       calls.frames.push(frame);
@@ -246,6 +247,48 @@ await test('同一 session 对象的 path 或 sessionId 原地变化也静默取
     assert.deepEqual(h.calls.reports, []);
     assert.equal(h.controller.isSending(), false);
   }
+});
+
+await test('等待中切会话：等待按会话身份叫停，锁立即释放且不发帧', async () => {
+  let cancelled = 0;
+  // 模拟 websocket-client 的轮询：取消条件一成立就交回 false；没有取消条件只能等 200ms 后的回退。
+  const h = harness({
+    waitForReady: (shouldCancel) => new Promise((resolve) => {
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        resolve(value);
+      };
+      const fallback = setTimeout(() => finish(true), 200);
+      const tick = () => {
+        if (done) return;
+        if (shouldCancel && shouldCancel()) {
+          clearTimeout(fallback);
+          cancelled += 1;
+          finish(false);
+          return;
+        }
+        setTimeout(tick, 5);
+      };
+      tick();
+    }),
+  });
+
+  const sending = h.controller.send();
+  h.state.session = { path: 'other/path', sessionId: 'other-id' };
+  const settled = await Promise.race([
+    sending.then(() => 'settled'),
+    new Promise((resolve) => setTimeout(() => resolve('waited-too-long'), 80)),
+  ]);
+
+  assert.equal(settled, 'settled', '切会话必须立刻结束等待，不能锁满整个轮询超时');
+  assert.ok(cancelled > 0, '取消条件必须按「会话身份变了」成立');
+  assert.equal(h.controller.isSending(), false, '锁必须在取消当刻释放');
+  assert.deepEqual(h.calls.sending, [true, false]);
+  assert.equal(h.calls.frames.length, 0, '取消等待不等于继续发送');
+  assert.equal(h.calls.commits.length, 0);
+  assert.deepEqual(h.calls.reports, [], '切会话不是连接故障，不该报 not-ready');
 });
 
 await test('等待异常原样传播且 finally 释放锁', async () => {

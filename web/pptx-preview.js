@@ -363,7 +363,8 @@ function renderPage(doc, slide) {
 /**
  * 把一本 pptx 挂到容器里。
  *
- * @param {{ zip: object, container: Element }} opts
+ * zip 不能写成裸 object：readDeck 要 has/match/text 三个方法，形状对不上就只能靠运气。
+ * @param {Partial<{ zip: { has(n: string): boolean, match(p: string): string[], text(n: string): Promise<string|null> }, container: Element }>} [opts]
  * @returns {Promise<{ destroy(): void, deck: object }>}
  */
 export async function mountPptx({ zip, container } = {}) {

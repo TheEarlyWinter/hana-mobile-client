@@ -12,6 +12,9 @@
  * 9. open / close / destroy 生命周期与 scrollToLatest 滚动行为
  * 10. 顶部栏交互（返回触发 onClose、表情包按钮触发 onOpenStickers）
  * 11. 标记已读 onMarkRead 的时机与单条去重逻辑
+ * 12. 已读上报失败（false / reject）不记账，下一次状态更新重试；reset() 清空去重
+ * 13. reset() 清空输入框草稿（切 Agent / 登出后不带走旧草稿）
+ * 14. 空历史且加载结束时展示空态文案，加载中 / 有条目时不展示
  *
  * 验收规则：
  * 必须全绿并在结尾输出 ALL PASS，若失败则 process.exit(1)。
@@ -524,6 +527,149 @@ await t('用户往上翻历史时，新消息到达不把视口拽回底部', as
   });
 
   assert.equal(messagesEl.scrollTop, 800, '看历史时不能被自动滚到底');
+
+  view.destroy();
+});
+
+/* =========================================================================
+ * 12. 已读上报失败后必须能重试
+ * ========================================================================= */
+await t('已读上报失败（reject / false）不记账，下一次状态更新必须重试，成功后不再重复', async () => {
+  const h = createHarness({ debug: false });
+  const attempts = [];
+  let mode = 'reject';
+
+  const view = createCasualView({
+    document: h.doc,
+    onMarkRead: (id) => {
+      attempts.push(id);
+      if (mode === 'reject') {
+        const failed = Promise.reject(new Error('网络抖了一下'));
+        // 夹具自保：没接这个 Promise 的实现不应把整个测试进程炸掉（否则后面的用例都跑不到）。
+        failed.catch(() => {});
+        return failed;
+      }
+      if (mode === 'false') return Promise.resolve(false);
+      return Promise.resolve(true);
+    },
+  });
+
+  const entries = [
+    { id: 'e1', actor: 'user', item: { kind: 'text', text: '1' } },
+    { id: 'e2', actor: 'agent', item: { kind: 'text', text: '2' } },
+    { id: 'e3', actor: 'agent', item: { kind: 'text', text: '3' } },
+  ];
+
+  view.setState({ entries, unread: 2 });
+  view.open();
+  assert.equal(attempts.length, 1, '打开时应对最早未读条目发一次上报');
+  // 同一批状态更新连续到达时（还在上报中）不能对同一条并发重发
+  view.setState({ typing: true });
+  assert.equal(attempts.length, 1, '上报未完成前不得重复调用');
+  await tick();
+
+  view.setState({ typing: false });
+  assert.equal(attempts.length, 2, 'reject 之后必须重试');
+  await tick();
+
+  mode = 'false';
+  view.setState({ typing: true });
+  assert.equal(attempts.length, 3, '返回 false 同样算失败，也要重试');
+  await tick();
+
+  mode = 'ok';
+  view.setState({ typing: false });
+  assert.equal(attempts.length, 4, '没确认成功就一直重试');
+  await tick();
+
+  view.setState({ typing: true });
+  view.open();
+  assert.equal(attempts.length, 4, '确认成功后同一条不再重复上报');
+  assert.deepEqual(attempts, ['e2', 'e2', 'e2', 'e2']);
+
+  view.destroy();
+});
+
+await t('reset() 清空已读去重：换 Agent / 登出后同一条可以重新上报', async () => {
+  const h = createHarness({ debug: false });
+  const attempts = [];
+  const view = createCasualView({
+    document: h.doc,
+    onMarkRead: (id) => {
+      attempts.push(id);
+      return Promise.resolve(true);
+    },
+  });
+
+  const entries = [
+    { id: 'e1', actor: 'user', item: { kind: 'text', text: '1' } },
+    { id: 'e2', actor: 'agent', item: { kind: 'text', text: '2' } },
+    { id: 'e3', actor: 'agent', item: { kind: 'text', text: '3' } },
+  ];
+
+  view.setState({ entries, unread: 2 });
+  view.open();
+  await tick();
+  assert.deepEqual(attempts, ['e2'], '成功上报一次');
+
+  view.open();
+  assert.deepEqual(attempts, ['e2'], '同一条不应重复上报');
+
+  view.reset();
+  view.open();
+  assert.deepEqual(attempts, ['e2', 'e2'], 'reset 之后旧 id 不能继续挡着');
+
+  view.destroy();
+});
+
+/* =========================================================================
+ * 13. 草稿清理
+ * ========================================================================= */
+await t('reset() 清空输入框草稿，close() 不动草稿（同一对象重开要保留）', () => {
+  const h = createHarness({ debug: false });
+  const view = createCasualView({ document: h.doc });
+
+  const root = h.doc.body.querySelector('.casual-view');
+  const inputEl = root.querySelector('.casual-input');
+
+  view.open();
+  inputEl.value = '写了一半的话';
+
+  view.close();
+  view.open();
+  assert.equal(inputEl.value, '写了一半的话', '同一个助手的草稿关掉再打开应该还在');
+
+  view.reset();
+  assert.equal(inputEl.value, '', 'reset() 必须清空草稿');
+
+  view.destroy();
+});
+
+/* =========================================================================
+ * 14. 空态
+ * ========================================================================= */
+await t('空历史且加载结束时展示空态文案，加载中 / 有条目时都不展示', () => {
+  const h = createHarness({ debug: false });
+  const view = createCasualView({ document: h.doc });
+
+  const root = h.doc.body.querySelector('.casual-view');
+  const emptyEl = root.querySelector('.casual-empty');
+  assert.ok(emptyEl, '视图里应有空态节点');
+  assert.equal(emptyEl.hidden, true, '数据还没到时不展示');
+
+  view.setState({ loading: true, entries: [] });
+  assert.equal(emptyEl.hidden, true, '加载中交给骨架屏，不出空态');
+  assert.equal(root.querySelector('.casual-skeleton').hidden, false, '加载中骨架屏应可见');
+
+  view.setState({ loading: false, entries: [] });
+  assert.equal(emptyEl.hidden, false, '加载结束且没有条目时应展示空态');
+  assert.match(emptyEl.textContent, /还没有消息/);
+
+  view.setState({
+    loading: false,
+    entries: [{ id: 'e1', actor: 'agent', item: { kind: 'text', text: '1' } }],
+  });
+  assert.equal(emptyEl.hidden, true, '有条目后空态隐藏');
 
   view.destroy();
 });

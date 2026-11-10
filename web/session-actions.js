@@ -54,9 +54,19 @@ function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/** 路径归一：反斜杠转正斜杠 + 小写 + 去首尾空白（对齐 card-controller 的口径）。 */
+const WIN_DRIVE = /^[a-zA-Z]:\//;
+
+/**
+ * 路径归一：反斜杠转正斜杠 + 去首尾空白。
+ *
+ * 大小写只有盘符路径忽略：Windows 文件系统不区分，POSIX 区分——真挂 POSIX 主机时
+ * `/work/A` 与 `/work/a` 是两个会话，无条件转小写会把它们并成一个（见 file-source.js
+ * 的 matchWorkspaceRoot，同一个口径）。
+ * 非路径的键（sessionId）也走这里比对，它们不带盘符，因此大小写原样保留。
+ */
 function normalizePath(value) {
-  return text(value).replace(/\\/g, '/').toLowerCase();
+  const p = text(value).replace(/\\/g, '/');
+  return WIN_DRIVE.test(p) ? p.toLowerCase() : p;
 }
 
 /** 取会话文件路径。path 优先，其次 sessionPath。 */
@@ -141,7 +151,8 @@ function normalizeTitle(title) {
 
 /**
  * 重命名。
- * @returns {{ action: 'rename', request: { method: string, url: string, body: object },
+ * @returns {{ action: 'rename', target: object,
+ *             request: { method: string, url: string, body: object },
  *             apply: (list: object[]) => object[] }}
  */
 export function planRename(session, title) {
@@ -272,6 +283,12 @@ export function createSessionActions({
     }
   }
 
+  /**
+   * 报错。phase 由调用方给（'plan' | 'request'），只往回调与返回结果里带，不参与流程判定。
+   * @param {string} action
+   * @param {any} error
+   * @param {{ phase?: 'plan'|'request', rolledBack?: boolean, stale?: boolean }} [options]
+   */
   function reportError(action, error, { phase, rolledBack = false, stale = false } = {}) {
     const list = safeReadList();
     try {
@@ -288,6 +305,9 @@ export function createSessionActions({
       throw new SessionActionError('no-fetch', '没有可用的 fetch 实现，无法发送会话操作请求');
     }
 
+    // 注解不能省：doFetch 是「注入实现」与 globalThis.fetch 的联合，实参得同时满足
+    // RequestInit；不标注时 credentials 会被推成 string，对不上 RequestCredentials。
+    /** @type {RequestInit} */
     const init = {
       method: request.method || 'POST',
       credentials: 'same-origin',
@@ -454,9 +474,9 @@ function renameSeed(session) {
 /**
  * 创建会话动作菜单视图。
  *
- * @param {object} options
- * @param {Document} options.document DOM 工厂（必填，杜绝全局隐式读取）
- * @param {Element} options.mount 宿主容器（必填）：菜单挂在这里，模块不找别人的节点
+ * @param {object} [options]
+ * @param {Document} [options.document] DOM 工厂（必填，杜绝全局隐式读取）
+ * @param {Element} [options.mount] 宿主容器（必填）：菜单挂在这里，模块不找别人的节点
  * @param {(event: object) => void} [options.onAction] 动作回调：
  *   { type: 'pin', session }
  *   { type: 'archive', session }（只会在归档确认态里再点一次之后发出）

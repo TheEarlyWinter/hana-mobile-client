@@ -25,19 +25,12 @@ function pathEquals(a, b) {
   return normalizePath(a) === normalizePath(b);
 }
 
-function b64url(s) {
-  const bytes = new TextEncoder().encode(s);
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 /**
  * 创建卡片控制器。
  *
- * @param {object} options
- * @param {Document} options.document - 宿主 DOM Document 对象
- * @param {object} options.bridge - CardBridge 实例
+ * @param {object} [options]
+ * @param {Document} [options.document] - 宿主 DOM Document 对象
+ * @param {object} [options.bridge] - CardBridge 实例
  * @param {Function} [options.fetchImpl] - fetch 实现（默认读取 globalThis.fetch）
  * @param {Function} [options.getSession] - 获取当前会话上下文函数
  * @param {object} [options.crypto] - Web Crypto 接口实例（默认读取 globalThis.crypto）

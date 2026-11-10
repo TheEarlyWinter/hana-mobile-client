@@ -130,14 +130,14 @@ function cloneAttachments(value) {
 /**
  * 建一个待发送队列。
  *
- * @param {object} options
- * @param {(payload: { id: string, sessionKey: string, text: string, attachments: object[], attempt: number }) => Promise<any>} options.send
+ * @param {object} [options]
+ * @param {(payload: { id: string, sessionKey: string, text: string, attachments: object[], attempt: number }) => Promise<any>} [options.send]
  *        真正发送的函数：resolve 算成功（resolve(false) 或 { ok: false } 算失败），reject 算失败。
  * @param {{ getItem: Function, setItem: Function, removeItem?: Function }} [options.storage] 存储后端
  * @param {() => number} [options.now] 当前时间（毫秒）
  * @param {(ms: number) => Promise<void>} [options.sleep] 等待实现，测试可注入假 sleep
  * @param {number} [options.maxAttempts] 最多尝试次数，默认 6
- * @param {number[]} [options.retryDelays] 退避梯度（毫秒），默认 [1000, 2000, 4000, 8000, 16000, 32000]
+ * @param {readonly number[]} [options.retryDelays] 退避梯度（毫秒），默认 [1000, 2000, 4000, 8000, 16000, 32000]
  */
 export function createOutbox({
   send,

@@ -92,6 +92,9 @@ export function createChatViewMode({ api, storage, onChange = () => {} } = {}) {
   const notify = typeof onChange === 'function' ? onChange : () => {};
 
   // 未加载过时的样子就是默认沉静，界面首屏不用等网络。
+  // 注解不能省：DEFAULT_VIEW_MODE 是字面量 'serene'，let 会把初值拓宽成 string，
+  // 于是下面两处 notify(mode) 对不上「只收 'serene' | 'classic'」的回调类型。
+  /** @type {'serene' | 'classic'} */
   let mode = DEFAULT_VIEW_MODE;
   // 每次 load / set 都 +1；响应回来时代号不是最新就说明有更晚的动作，丢弃这次结果。
   let seq = 0;

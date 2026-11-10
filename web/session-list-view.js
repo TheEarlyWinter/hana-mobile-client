@@ -84,11 +84,11 @@ export function sessionFolder(s, homeFolder = '') {
 /**
  * 创建会话列表视图。
  *
- * @param {object} options
- * @param {Document} options.document - DOM 工厂实例，杜绝全局隐式读取
- * @param {HTMLElement} options.container - 列表挂载容器
- * @param {Function} options.getContext - 获取实时上下文 { agentName, homeFolder, agents }
- * @param {Function} options.onOpenSession - 会话项点击回调
+ * @param {object} [options]
+ * @param {Document} [options.document] - DOM 工厂实例，杜绝全局隐式读取
+ * @param {HTMLElement} [options.container] - 列表挂载容器
+ * @param {Function} [options.getContext] - 获取实时上下文 { agentName, homeFolder, agents }
+ * @param {Function} [options.onOpenSession] - 会话项点击回调
  * @param {Function} [options.onRowAction] - 长按 / 右键回调，用于会话操作菜单
  * @param {Function} [options.now=() => Date.now()] - 时间基准生成函数，便于单测精确控制
  */

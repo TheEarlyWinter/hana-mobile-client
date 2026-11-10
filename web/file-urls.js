@@ -14,6 +14,9 @@
  *                  文件在 `/api/resources/<fileId>/content` 上回 400，那是真机上的 400 根因）；
  *                  都没有才退回资源地址。三者都没有才返回 null（真的没法读）。
  *                  `/gw/file/…` 只能读，不能当下载地址（壳的下载白名单只认工作区 content）。
+ *   thumbUrl    —— 缩略图专用，只给「条目自带绝对路径的图片」`/gw/file/<b64url(path)>`。
+ *                  缩略图是没人点也会自己发的请求，所以这一路**绝不退回资源地址**；
+ *                  没有 filePath 就返回 null，卡片改画扩展名徽标（零请求 = 零 400）。见 thumbUrlFor。
  *
  * 纯逻辑 + 一个显式注入的 service；不碰 DOM、不读全局 S。
  */
@@ -24,7 +27,15 @@ export function resourceContentUrl(fileId) {
   return `/api/resources/${encodeURIComponent(fileId.trim())}/content`;
 }
 
-/** 任意字节串 → base64url（URL 安全，去填充）。 */
+/**
+ * 任意字节串 → base64url（URL 安全，去填充）。
+ *
+ * 网关地址里的两个段子用的是同一种编码：`/gw/file/<b64url(path)>`（本模块）与
+ * `web/card.js` 的 `/gw/card/<b64url(dir)>/`。所以实现只留这一份，卡片侧 import 过去。
+ *
+ * @param {string} value
+ * @returns {string}
+ */
 export function b64url(value) {
   const bytes = new TextEncoder().encode(value);
   let bin = '';
@@ -38,14 +49,54 @@ export function fileUrlFor(realPath) {
   return `/gw/file/${b64url(realPath.trim())}`;
 }
 
+/** 能画成缩略图的扩展名：与网关 /gw/file 放行的图片格式一致（svg 不在放行表里，别列）。 */
+const THUMB_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp']);
+
+/** 扩展名：优先用宿主给的 ext，没有再取文件名最后一段。 */
+function extOf(file) {
+  const declared = String(file?.ext || '').replace(/^\./, '').trim().toLowerCase();
+  if (declared) return declared;
+  const label = String(file?.label || file?.filename || '');
+  const dot = label.lastIndexOf('.');
+  return dot > 0 && dot < label.length - 1 ? label.slice(dot + 1).toLowerCase() : '';
+}
+
 /**
- * @param {object} options
- * @param {{ listRoots: () => Promise<any> }} options.service 工作区服务（/api/studio/workspaces）
+ * 卡片缩略图的地址：只有「图片 + 条目自带绝对路径」才给，而且一定走
+ * `/gw/file/<b64url(path)>`——正文图片用的就是这条路由（真机 200）。
+ *
+ * 为什么没有 filePath 就返回 null、不再退回资源地址（缺陷 H6e）：
+ *   `/api/resources/<fileId>/content` 是宿主的资源接口，对 agent 生成/外部存储的文件
+ *   （storageKind: "external"）回 400——真机日志里那条
+ *   `GET /api/resources/sf_…/content → 400`、gateway/file-roots.mjs 与
+ *   gateway/session-files.mjs 的注释指向的都是同一个原因。缩略图和用户点开预览不一样：
+ *   它是**没人要求就自己发**的请求，拿一个可能 400 的地址去猜，代价就是控制台一直报错、
+ *   屏幕上留一张空图。没有绝对路径时宁可不画缩略图——卡片本来就靠扩展名徽标认人。
+ *
+ * 为什么不做「从会话文件列表反查真实路径」：宿主给手机的两条读法一条按路径
+ *   （`/gw/file/<b64url(path)>`）、一条按 fileId（`/api/resources/<id>/content`），没有
+ *   fileId → path 的索引，也没有列会话文件目录的接口（gateway/session-files.mjs 只解析路径）。
+ *   要补就得在 gateway/ 里加路由，超出这张卡的范围，所以这一版走「没有路径就不取」。
+ *
+ * 只读本地字段，不发请求：`/gw/file/…` 由宿主/网关自己去读盘。
+ *
+ * @param {{ext?: string, label?: string, filename?: string, filePath?: string}} [file]
+ * @returns {string|null}
+ */
+export function thumbUrlFor(file) {
+  if (!THUMB_IMAGE_EXTS.has(extOf(file))) return null;
+  // fileUrlFor 只产出 /gw/file/…：结构上不可能退化成会 400 的资源地址。
+  return fileUrlFor(file?.filePath);
+}
+
+/**
+ * @param {object} [options]
+ * @param {{ listRoots: () => Promise<any> }} [options.service] 工作区服务（/api/studio/workspaces）
  * @param {() => object|null} [options.getSession] 当前会话（找 agentId / workspaceMountId / label）
  * @param {() => object|null} [options.getPrincipal] 当前登录身份（工作区根缓存按人隔离）
- * @param {(file: object, roots: Array<{mountId: string, path: string}>, agentId: string) => string|null} options.workspaceUrlForFile
- * @param {(filePath: string, label: string) => ({subdir: string, name: string}|null)} options.matchWorkspaceByLabel
- * @param {(parts: object) => string|null} options.buildWorkspaceContentUrl
+ * @param {(file: object, roots: Array<{mountId: string, path: string}>, agentId: string) => string|null} [options.workspaceUrlForFile]
+ * @param {(filePath: string, label: string) => ({subdir: string, name: string}|null)} [options.matchWorkspaceByLabel]
+ * @param {(parts: object) => string|null} [options.buildWorkspaceContentUrl]
  */
 export function createSessionFileUrls({
   service,

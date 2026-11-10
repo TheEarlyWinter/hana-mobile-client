@@ -308,8 +308,8 @@ function normalizeAttachments(raw) {
 /**
  * 创建闲聊通道的 HTTP 客户端。
  *
- * @param {object} options
- * @param {(path: string, init?: {method?: string, body?: string}) => Promise<any>} options.request 注入的请求函数
+ * @param {object} [options]
+ * @param {(path: string, init?: {method?: string, body?: string}) => Promise<any>} [options.request] 注入的请求函数
  * @param {string} [options.agentId] 当前闲聊的 agent id；也可稍后用 setAgentId 设置
  * @param {() => string} [options.newId] clientMessageId 生成器，默认 crypto.randomUUID（不可用时时间戳+随机）
  * @returns {{

@@ -7,18 +7,23 @@
  * 定时器、断线时点停止），把它们集中在一处才能一眼看全。所有副作用通过注入的
  * onReadyChange / onOpen / onMessage / onAbortFlushed 回调交回给 app，模块自己不碰 DOM。
  *
- * 状态仍然放在调用方给的 state 对象上（ws / wsReady / reconnectDelay / pendingAbort / session），
+ * 状态仍然放在调用方给的 state 对象上（ws / wsReady / reconnectDelay / session），
  * 因为 app 里别处也要读它们（发送按钮可用性、等连接的循环）；模块只负责维护一致性。
+ * 断线时排队的 abort 不在 state 上了：归 abort-queue.js，由调用方注入（见 abortQueue 参数）。
  *
  * 契约：
  *   - connect()：取消排队中的重连，代次 +1，先摘旧引用再关旧连接，再建新的；
  *     旧连接晚到的 open/message/close/error 一律因代次不符被丢弃。
+ *     没有 WebSocket 能力或构造失败时**不抛**，改报 onUnavailable：调用方是
+ *     openSession / 重连定时器 / 前台恢复，没有一处 catch，抛出去就是未捕获错误。
  *   - drop()：彻底放弃连接与排队中的重连（退出登录 / 回首页 / 身份切换）。
  *   - send(frame)：连接不是 OPEN 时返回 false 并且不丢帧；返回 true 表示已写进连接。
- *   - waitForReady(ms)：等连接就绪，超时返回 false（不 reject）。
+ *   - waitForReady(ms, shouldCancel)：等连接就绪，超时或被取消都返回 false（不 reject）。
+ *     取消只结束等待，不代表别处不该发帧——发不发由调用方按自己的归属条件决定。
  *   - scheduleReconnect(delay)：只保留一个定时器引用，重复调用以最后一次为准。
- *   - setPendingAbort(pending) / flushPendingAbort()：断线时点的「停止」排在这里，
+ *   - flushPendingAbort()：断线时点的「停止」排进 abortQueue，
  *     连接恢复后先补发；发出去之后才回调 onAbortFlushed 收本地生成态。
+ *     入队由 composer 负责（它是「停止」的生产者），这里只负责补发。
  *
  * 连接状态（onStatusChange，给 E9 顶部断线细条用）：
  *   - 'connecting'：刚发起一次连接（首屏、手动重连、退避到点后的自动重连）；
@@ -31,13 +36,15 @@
  */
 
 import { parseSocketPayload } from './protocol.js';
+import { createAbortQueue } from './abort-queue.js';
 
 const DEFAULT_RECONNECT_DELAY = 800;
 const MAX_RECONNECT_DELAY = 8000;
 
 /**
- * @param {object} options
- * @param {object} options.state 持有 ws / wsReady / reconnectDelay / pendingAbort / session 的状态对象
+ * @param {object} [options]
+ * @param {object} [options.state] 持有 ws / wsReady / reconnectDelay / session 的状态对象
+ * @param {{ push: (entry: any) => boolean, peek: () => any, take: () => any, clear: () => void, size: () => number }} [options.abortQueue] 断线时「停止」的待补发队列（与 composer 共用同一个实例）；缺省自建
  * @param {() => object|null} [options.getSession]
  * @param {() => any} [options.getWebSocket] 取 WebSocket 构造器（测试可替换）
  * @param {() => {protocol: string, host: string}} [options.getLocation]
@@ -46,6 +53,9 @@ const MAX_RECONNECT_DELAY = 8000;
  * @param {(ready: boolean) => void} [options.onReadyChange] 连接就绪/断开（改指示灯、按钮）
  * @param {(status: 'connecting'|'connected'|'reconnecting'|'closed') => void} [options.onStatusChange]
  *        连接层状态（细条提示用）；在任何业务回调之后触发
+ * @param {(reason: 'unsupported'|'constructor', error?: any) => void} [options.onUnavailable]
+ *        连不了：内核没有 WebSocket（unsupported）或构造器当场抛错（constructor）。
+ *        这不是断线，重连也没用，所以不排重连、只报一次。
  * @param {() => void} [options.onError] socket 报错（只改指示灯，不动按钮）
  * @param {(info: {aborted: boolean}) => void} [options.onOpen] 连接就绪后的业务钩子
  * @param {(data: object) => void} [options.onMessage] 收到一条 JSON 事件
@@ -56,6 +66,7 @@ const MAX_RECONNECT_DELAY = 8000;
  */
 export function createWebsocketClient({
   state,
+  abortQueue = null,
   getSession = () => state.session,
   shouldReconnect = () => Boolean(getSession()),
   getWebSocket = () => globalThis.WebSocket,
@@ -64,6 +75,7 @@ export function createWebsocketClient({
   makeAbortFrame = () => null,
   onReadyChange = () => {},
   onStatusChange = () => {},
+  onUnavailable = () => {},
   onError = () => {},
   onOpen = () => {},
   onMessage = () => {},
@@ -71,6 +83,9 @@ export function createWebsocketClient({
   debug = () => {},
 } = {}) {
   if (!state) throw new TypeError('createWebsocketClient requires { state }');
+
+  /** 断线时点的「停止」排在这里，连接恢复后补发。生产装配会传与 composer 相同的那一个。 */
+  const aborts = abortQueue || createAbortQueue();
 
   // 连接代次：每次 connect 换一个号。所有回调只认自己那一代，旧连接晚到的
   // message/close/error 一律丢弃。否则一条迟到的 close 会把刚建好的连接标成断线，
@@ -125,7 +140,7 @@ export function createWebsocketClient({
   function drop() {
     cancelReconnect();
     generation += 1;   // 让在途回调全部作废
-    state.pendingAbort = null;
+    aborts.clear();
     const wasReady = Boolean(state.wsReady);
     const ws = state.ws;
     state.ws = null;
@@ -135,6 +150,16 @@ export function createWebsocketClient({
     if (wasReady) onReadyChange(false);
     // 主动收摊不是故障：让调用方把「正在重连」的提示一起收掉。
     emitStatus('closed');
+  }
+
+  /**
+   * 报一次「连接能力不可用」。状态已由 connect 收干净（旧连接、就绪位都掉了），
+   * 这里只通报。不排重连：重试只会重复同一个失败，而用户要的是一句说得清的话
+   * （更新内核、稍后重开页面），不是一条永远在闪的细条。
+   */
+  function reportUnavailable(reason, error) {
+    emitStatus('closed');
+    onUnavailable(reason, error);
   }
 
   function connect() {
@@ -154,7 +179,20 @@ export function createWebsocketClient({
     const loc = getLocation();
     const proto = loc.protocol === 'https:' ? 'wss' : 'ws';
     const Impl = getWebSocket();
-    const ws = new Impl(`${proto}://${loc.host}/ws`);
+    // 老 WebView 没有 WebSocket：调用方是 openSession / 重连定时器 / 前台恢复，
+    // 没有一个 catch，`new undefined` 会变成白屏级的未捕获错误。
+    if (typeof Impl !== 'function') {
+      reportUnavailable('unsupported');
+      return;
+    }
+    let ws;
+    try {
+      ws = new Impl(`${proto}://${loc.host}/ws`);
+    } catch (err) {
+      // 构造器当场炸（内核损坏、地址被安全策略拒）：同样不能抛给上面那些没 catch 的调用方。
+      reportUnavailable('constructor', err);
+      return;
+    }
     state.ws = ws;
     const isCurrent = () => myGeneration === generation && state.ws === ws;
 
@@ -214,12 +252,17 @@ export function createWebsocketClient({
    *
    * 新建会话会重连 WS，这期间 wsReady 是 false。直接 return 的话消息就这样静静消失
    * （输入框已经清空、用户消息已经画上去了）。这里等一会儿，超时交回给调用方决定。
+   *
+   * shouldCancel 给「等到一半就不该再等」用（切会话 / 退回列表）：单飞锁在调用方的
+   * finally 里，晚一轮返回就多锁 60ms，最坏锁满整个 timeoutMs，用户看到的是发送键
+   * 灰着点不动。
    */
-  function waitForReady(timeoutMs = 4000) {
+  function waitForReady(timeoutMs = 4000, shouldCancel = null) {
     if (isReady()) return Promise.resolve(true);
     return new Promise((resolve) => {
       const started = performance.now();
       const tick = () => {
+        if (shouldCancel && shouldCancel()) { resolve(false); return; }
         if (isReady()) { resolve(true); return; }
         if (performance.now() - started > timeoutMs) { resolve(false); return; }
         setTimeout(tick, 60);
@@ -260,27 +303,22 @@ export function createWebsocketClient({
     });
   }
 
-  /** 断线时点的「停止」先排在这里，等连接恢复补发。 */
-  function setPendingAbort(pending) {
-    state.pendingAbort = pending || null;
-  }
-
   /**
    * 把断线期间排队的 abort 补发出去。
    * @returns {boolean} 这次是否真的发出去了（发出去才收本地的生成态）
    */
   function flushPendingAbort() {
-    const pending = state.pendingAbort;
+    const pending = aborts.peek();
     if (!pending) return false;
     const session = getSession();
     // 会话已经换了或退了：那一轮不属于现在的界面，排队作废。
     if (!session || session.path !== pending.sessionPath) {
-      state.pendingAbort = null;
+      aborts.take();
       return false;
     }
     const frame = makeAbortFrame(pending);
     if (!frame || !send(frame)) return false;   // 还是发不出去，继续排队
-    state.pendingAbort = null;
+    aborts.take();
     onAbortFlushed();
     return true;
   }
@@ -296,7 +334,9 @@ export function createWebsocketClient({
     claimAttention,
     requestContextUsage,
     resumeStream,
-    setPendingAbort,
+    // 队列实例对外露一手：composer 装配时没单独注入时拿这个，保证
+    // 「写的那个」和「补发的这个」是同一个，不会各存各的。
+    abortQueue: aborts,
     flushPendingAbort,
   };
 }

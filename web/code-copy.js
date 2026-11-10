@@ -44,11 +44,11 @@ const controllers = new WeakMap();
 /**
  * 在 root 上装代码块复制。
  *
- * @param {object} options
- * @param {Element} options.root 消息列表容器（事件委托挂点，sync 的默认扫描范围）
+ * @param {object} [options]
+ * @param {Element} [options.root] 消息列表容器（事件委托挂点，sync 的默认扫描范围）
  * @param {Document} [options.doc] 创建按钮用的 document
  * @param {Navigator} [options.navigator] 传给剪贴板实现的 navigator
- * @param {(text: string, deps: object) => Promise<{ok: boolean}>} copy 复制实现（必填，由装配层注入）
+ * @param {(text: string, deps: object) => Promise<{ok: boolean}>} [options.copy] 复制实现（必填，由装配层注入）
  * @param {{setTimeout: Function, clearTimeout: Function}} [options.timers] 复位定时器来源
  * @returns {{ sync: (scope?: Element) => number }}
  */

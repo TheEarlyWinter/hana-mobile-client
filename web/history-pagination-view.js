@@ -20,7 +20,7 @@
  *     看的那条消息上，而不是被拽到底部；
  *   - 只认锚点位移，不认 scrollHeight 增量：生成中助手在锚点**下方**往下长，scrollHeight 会涨
  *     但锚点 top 不动；按高度算就会把这段流式增长当成「前面插进来的」，把用户往回带
- *     （历史审查记录里的 Minor 项）；
+ *     （docs/audit/2026-11-05-history-preview-fix.md 的 Minor 记录）；
  *   - 一次同步测量之后，图片 / 卡片 iframe 还会继续把 prepend 内容撑开：endPrepend 起在
  *     settleMs 窗口内继续按锚点位移补偿，用户自己滚了就立刻收手；锚点消失则结束观察；
  *   - 补偿窗口里「scrollTop 变了」有三种来源：本模块写的、装配层写的（scrollPin.pinNow /
@@ -34,9 +34,9 @@
  */
 
 /**
- * @param {object} options
- * @param {Document} options.document - DOM 工厂，杜绝全局隐式读取
- * @param {HTMLElement} options.container - 消息容器（通常是 #transcript）
+ * @param {object} [options]
+ * @param {Document} [options.document] - DOM 工厂，杜绝全局隐式读取
+ * @param {HTMLElement} [options.container] - 消息容器（通常是 #transcript）
  * @param {Function} [options.onLoadOlder] - 点「加载更早 / 重试」
  * @param {object} [options.labels] - 覆盖默认文案
  * @param {() => number} [options.now] - 时钟（测试注入假时钟）
@@ -221,7 +221,7 @@ export function createHistoryPaginationView({
    * 补多少只问锚点：beginPrepend 时记住旧内容的第一条（它下面全是旧消息），新页插在它
    * 上面，它的 top 被往下推了多少就补多少。生成中的流式内容长在锚点下方，它的 top 不动，
    * 于是这里的位移天然只包含「前面插进来的高度」，不用再按 scrollHeight 去猜（那会把流式
-   * 增长算成 prepend，见历史审查记录里的 Minor 项）。
+   * 增长算成 prepend，见 docs/audit/2026-11-05-history-preview-fix.md 的 Minor 记录）。
    *
    * 做法：endPrepend 之后开一个观察窗口（默认 1.2 秒），每次采样只把锚点 top 的正增量
    * 加进 scrollTop；用户自己滚了（滚动事件里的位置与我们的预期值对不上）就立刻收手，

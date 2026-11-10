@@ -20,6 +20,14 @@
  *
  * 本地乐观条目在 Entry 形状上额外带：local:true / pending / failed / confirmed / error / payload。
  * 合并规则：按 sourceEntryId 去重、按 occurredAt 再按 id 排序、服务端条目优先于本地 pending。
+ *
+ * @param {object} options
+ * @param {object} options.client casual client（鸭子类型：getAgentId / setAgentId / loadSummary / loadPage / send / markRead）
+ * @param {() => number} [options.now]
+ * @param {number} [options.pollMs]
+ * @param {(fn: Function, ms: number) => any} [options.setTimer]
+ * @param {(handle: any) => void} [options.clearTimer]
+ * @param {(state: object) => void} [options.onState]
  */
 
 const POLL_ERROR_THRESHOLD = 3;
@@ -73,6 +81,9 @@ export function createCasualStore({
   let pollGen = 0;
   // 登录上下文代次：reset / 换 agent 时推进。同一个 agent 重登也必须让旧请求作废。
   let contextEpoch = 0;
+  // 摘要代次：WS 推送和本地更新（已读清零 / reset）各推一次。摘要请求发起时记下它，
+  // 回来时如果已经变了，说明手上这份摘要比本地状态旧，不能拿它盖掉 unread / preview。
+  let summarySeq = 0;
   let pollFailures = 0;
   let timerHandle = null;
   let refreshPromise = null;
@@ -234,6 +245,24 @@ export function createCasualStore({
       sending.delete(clientMessageId);
     }
 
+    // 回执不一定带回 clientMessageId（宿主侧没有这个契约）。发成功时本地条目已经把 id
+    // 换成了宿主给的 entryId，所以「本地条目的 id 能在服务端列表里找到」同样说明是同一条：
+    // 这类本地副本必须收掉，否则屏幕上会出现两条一模一样的气泡，直到下一轮轮询才消失。
+    // 服务端条目的两个 id 都要进集合：索引键用的是 sourceEntryId || id，而回执给的
+    // entryId 可能是剥掉 source 前缀的那一个。
+    const serverKeys = new Set();
+    for (const entry of serverEntries) {
+      if (!entry) continue;
+      if (typeof entry.sourceEntryId === 'string' && entry.sourceEntryId) serverKeys.add(entry.sourceEntryId);
+      if (typeof entry.id === 'string' && entry.id) serverKeys.add(entry.id);
+    }
+    for (const [clientMessageId, local] of localEntries) {
+      if (!local || local.confirmed !== true) continue;
+      if (typeof local.id === 'string' && serverKeys.has(local.id)) {
+        localEntries.delete(clientMessageId);
+      }
+    }
+
     const locals = [];
     for (const entry of localEntries.values()) locals.push(entry);
     entries = [...serverEntries, ...locals].sort(compareEntries);
@@ -262,6 +291,11 @@ export function createCasualStore({
       unread = Math.max(0, Math.trunc(summary.unread));
     }
     preview = summary.preview || null;
+  }
+
+  /** 本地状态比在途摘要新了，推进代次。 */
+  function bumpSummarySeq() {
+    summarySeq += 1;
   }
 
   function applyPage(page, { first = false } = {}) {
@@ -362,6 +396,8 @@ export function createCasualStore({
     loadedEarlier = false;
     reportedRead.clear();
     error = null;
+    // 还没回来的摘要属于 reset 之前的那一版，不能再把未读顶回来。
+    bumpSummarySeq();
     rebuild();
   }
 
@@ -489,6 +525,7 @@ export function createCasualStore({
     if (!opened || generation !== pollGen) return;
     const agentAtPoll = agentId;
     const epochAtPoll = contextEpoch;
+    const seqAtPoll = summarySeq;
 
     const [summaryResult, pageResult] = await Promise.all([
       settle(() => client.loadSummary()),
@@ -499,9 +536,11 @@ export function createCasualStore({
 
     let failure = null;
     try {
-      if (summaryResult.ok) {
+      // 请求期间来了 WS 推送（或本地把未读清了）：这份摘要已经旧了。整份丢掉，
+      // 下一轮就补回来；只挑字段套用会出现「新未读数 + 旧预览」这类错配。
+      if (summaryResult.ok && seqAtPoll === summarySeq) {
         applySummary(summaryResult.value);
-      } else {
+      } else if (!summaryResult.ok) {
         failure = toError(summaryResult.error);
       }
     } catch (cause) {
@@ -561,6 +600,8 @@ export function createCasualStore({
           if (!entry || typeof entry !== 'object') return false;
           // 帖子太大时宿主只推壳，让客户端自己拉：整页刷一次比猜单条接口稳。
           if (entry.deferred) {
+            // 先推进代次再 refresh：refresh 会在发起时记下新代次，自己那份摘要不会被自己丢掉。
+            bumpSummarySeq();
             void refresh();
             return true;
           }
@@ -602,6 +643,8 @@ export function createCasualStore({
     }
 
     if (changed) {
+      // 推送带的是此刻的真值：在途的摘要一律作废。
+      bumpSummarySeq();
       rebuild();
       emit();
     }
@@ -613,6 +656,7 @@ export function createCasualStore({
   async function runRefresh() {
     const agentAtLoad = agentId;
     const epochAtLoad = contextEpoch;
+    const seqAtLoad = summarySeq;
     const [summaryResult, pageResult] = await Promise.all([
       settle(() => client.loadSummary()),
       settle(() => client.loadPage()),
@@ -622,8 +666,12 @@ export function createCasualStore({
 
     let failure = null;
     try {
-      if (summaryResult.ok) applySummary(summaryResult.value);
-      else failure = toError(summaryResult.error);
+      // 同 pollOnce：发起后本地又变过（WS 推送 / 已读清零）就丢掉这份旧摘要。
+      if (summaryResult.ok && seqAtLoad === summarySeq) {
+        applySummary(summaryResult.value);
+      } else if (!summaryResult.ok) {
+        failure = toError(summaryResult.error);
+      }
     } catch (cause) {
       failure = toError(cause);
     }
@@ -773,6 +821,8 @@ export function createCasualStore({
         await client.markRead(entryId);
         if (epochAtRead !== contextEpoch || agentAtRead !== agentId) return false;
         reportedRead.add(entryId);
+        // 本地已读比在途摘要新：别让那份摘要把未读又顶回来。
+        bumpSummarySeq();
         if (entryId === latestAgentEntryId()) {
           unread = 0;
           emit();

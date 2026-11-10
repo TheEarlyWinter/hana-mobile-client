@@ -234,9 +234,9 @@ function disposeTask(task) {
 /**
  * 把一份 PDF 挂到 container 里。
  *
- * @param {object} options
- * @param {string} options.url            同源读取地址（/api/…）
- * @param {Element} options.container     容器，内容由本模块独占
+ * @param {object} [options]
+ * @param {string} [options.url]            同源读取地址（/api/…）
+ * @param {Element} [options.container]     容器，内容由本模块独占
  * @param {object} [options.headers]      额外请求头
  * @param {() => Promise<object>} [options.loadLibrary] 库加载器（测试注入假库）
  * @param {Document} [options.doc]        默认 globalThis.document

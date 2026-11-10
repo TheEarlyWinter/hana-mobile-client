@@ -8,10 +8,100 @@
  * 所有外部依赖都从工厂参数进：状态对象、几个 DOM 取节点函数、历史容器、
  * 卡片控制器、文件地址实例、头像与 flash。模块不 import 回 app.js。
  *
+ * 不碰 DOM 的那一半不在这个闭包里：尾注数字与时长文案在 renderer-stats.js，
+ * 工具行的显示名与收尾三态在 tool-line.js。都是纯函数，改它们不必穿过整份渲染器。
+ *
  * 顺带说明两个容易踩的点：
  *  - historyView 用 getter 传（历史容器在模块之后才建），因为「插入历史页时别滚动」
  *    这个判断必须问当时的 historyView，而不是建渲染器那一刻的。
  *  - 一轮消息在存档里是好几条 assistant 消息，连续出现时用 .cont 隐掉重复头像。
+ */
+
+/* 下面几个 typedef 是这个模块的参数契约，不是文档装饰：
+ * 装配层注入 state / appState / getHistoryView / cardController / fileUrls 几个「袋子」，
+ * 以前一律写成 @param {object}，于是往里读 state.turn、view.append 时 tsc 只能说
+ * 「object 上没有这个属性」——查不出真正的属性名笔误。按实际读写的字段列出来之后，
+ * 写错字段名才会报错。
+ * 只列本模块真正读到的字段：别的模块往袋子里多塞东西不受影响（结构化类型），
+ * 本模块没读过的东西也不在这里替别人立约。
+ */
+
+/**
+ * 渲染器私有的「一轮画到哪儿了」状态袋（web/renderer-state.js 的实例）。
+ *
+ * 应用级字段（session / principal / agentName / userName / currentAgent）写成可选：装配层用
+ * appState 单独注入，不注入时就从 state 上读（老单测「一个对象装两类状态」的写法）。
+ * 同时也解释了下文 `const app = appState || state` 为什么两边都得有这几个字段：
+ * 类型上取联合之后，只有两个成员都声明过的属性才读得到。
+ *
+ * @typedef {object} ChatRendererState
+ * @property {HTMLElement|null} turn 本轮 .turn 根节点
+ * @property {HTMLElement|null} turnBody 本轮正文容器
+ * @property {HTMLElement|null} turnFootEl 本轮尾注（时间 + 耗能数字）
+ * @property {any} turnMeta 本轮 .turn-meta（<details>）。行上还按轮挂着 _tools / _think /
+ *   _thinkCount / _thinkOpen / _thinkTotal / _failed 这些记账字段，它们是 querySelector 拿到
+ *   的节点上现挂的，不重写代码就没法在 JSDoc 里表达——只有这一个字段用 any，换来的是
+ *   其余 14 个字段照样能抓错属性名。读它的函数（paintMeta 等）参数本来就是 untyped。
+ * @property {Element|null} textEl 正文节点（querySelector 的产物，只用到 innerHTML / classList）
+ * @property {string} streamingRaw 本轮已经上屏的原始正文
+ * @property {number} thinkAt 当前这段思考的起点（performance.now）
+ * @property {boolean} replaying 是否在历史回放中
+ * @property {Element|null} moodEl 嘀咕条容器
+ * @property {string} moodRaw 嘀咕条已上屏原文
+ * @property {number} turnStart 本轮计时起点
+ * @property {number} firstTokenMs 首响毫秒
+ * @property {number} charCount 本轮正文字数
+ * @property {number} speed 每秒字数
+ * @property {ChatRendererSession|null} [session] 应用级：当前会话（appState 不注入时从 state 读）
+ * @property {object} [principal] 应用级：登录身份。只做逐字引用比较（晚到的异步结果据此丢弃），
+ *   不读它的字段，所以收成 object 而不是 any。
+ * @property {string} [agentName] 应用级：全局 agent 名（会话没回填名字时的兜底）
+ * @property {string} [userName] 应用级：用户署名
+ * @property {{id?: string}|null} [currentAgent] 应用级：当前 agent（没有会话时头像取它的 id）
+ */
+
+/**
+ * 应用级状态（会话 / 登录身份 / 署名）。装配层用 appState 注入的就是 S，
+ * 它同时还有 sessions / ws 那些字段——结构化类型只看本模块读的这五个，多出来的不看。
+ *
+ * session 与 agentName 为什么也是可选的：S 的字面量里没有 currentAgent（登录后才补），
+ * 而单测里那一个「什么都装」的状态对象也不一定有。
+ *
+ * @typedef {object} ChatRendererAppState
+ * @property {ChatRendererSession|null} [session] 当前会话
+ * @property {any} [principal] 登录身份（只做引用比较，不替登录层立形状）
+ * @property {string} [agentName] 全局 agent 名
+ * @property {string} [userName] 用户署名
+ * @property {{id?: string}|null} [currentAgent] 当前 agent
+ */
+
+/**
+ * 当前会话（state.session / app.session）里渲染器读到的字段。
+ * @typedef {object} ChatRendererSession
+ * @property {string} agentName 会话自己的 agent 名（历史消息的署名）
+ * @property {string} [agentId] 会话的 agent id（头像用它）
+ * @property {string} [sessionId] 卡片归属快照用
+ * @property {string} [path] 卡片归属快照用（会话文件路径）
+ */
+
+/**
+ * 历史容器的窄口（web/history-pagination-view.js 的实例）。渲染器只用这三件事。
+ * @typedef {object} ChatRendererHistoryView
+ * @property {(node: Element) => void} append 挂一帧；prepend 期间插到锚点之前
+ * @property {() => boolean} isPrepending 正在往更早翻页（这时不该贴底）
+ * @property {(top?: number) => void} noteProgrammaticScroll 刚才是程序化写入的滚动位置
+ */
+
+/**
+ * 卡片渲染器（web/card-controller.js 的实例）。渲染器只负责把事件原样交过去。
+ * @typedef {object} ChatRendererCardController
+ * @property {(ev: object, sessionSnapshot: object, options?: {sessionFiles?: Array}) => Element} render
+ */
+
+/**
+ * 会话文件地址（web/file-urls.js 的实例）。
+ * @typedef {object} ChatRendererFileUrls
+ * @property {(file: object) => Promise<{readUrl: string|null, downloadUrl: string|null}>} forFile
  */
 
 import { el } from './dom.js';
@@ -25,21 +115,120 @@ import { startDownload } from './download.js';
 import { fileUrlFor, resourceContentUrl } from './file-urls.js';
 // 工具调用的「人话」翻译独立成模块：词表集中在一处，渲染器只负责摆 DOM。
 import { describeToolOp } from './tool-ops.js';
+// 纯文案与纯计算同样搬出闭包：流式热路径上每次重画尾注/摘要都会走到它们。
+import { prettyToolName, toolMark, toolStateText } from './tool-line.js';
+import { clockText, countOf, footStatsText, speedOf, thinkLabel } from './renderer-stats.js';
 
 /** 消息里引用的会话文件（sf_…）→ 资源内容地址。 */
 const resourceUrl = resourceContentUrl;
 
+/* ------------------------------------------------------------------ */
+/* 按文本找「那一轮」（搜索结果跳转用）                                  */
+/* ------------------------------------------------------------------ */
+
 /**
- * @param {object} options
- * @param {object} options.state 共享状态对象（turn / textEl / streamingRaw / mood…）
- * @param {(id: string) => Element|null} options.getElement
- * @param {() => object} options.getHistoryView 历史容器（append / isPrepending）
- * @param {object} options.cardController 卡片渲染
- * @param {object} options.fileUrls 会话文件的两个地址（file-urls.js 的实例）
- * @param {Function} options.paintAvatar
- * @param {Function} options.agentAvatarUrlById
- * @param {Function} options.userAvatarUrl
- * @param {(msg: string) => void} options.flash
+ * 一轮消息的稳定标记。
+ *
+ * 宿主的搜索结果只带会话 id 和一段 snippet，没有 messageId，打开会话之后只能按文本找回。
+ * 这个 key 不参与定位（定位靠文本），它的作用是让调用方在节点被翻动、重排之后
+ * 还能认出「就是这一轮」：有宿主给的消息 id 就用 id，没有就发一个序号。
+ */
+let turnKeySeq = 0;
+
+/**
+ * 给 turn 根节点打标。优先用消息自带 id（历史里的 entry.id 就是消息的全局索引），
+ * 没有就用递增序号——序号只在本次页面生命周期里唯一，够用且不依赖宿主。
+ *
+ * @param {HTMLElement|null} turn 走的是 el() 建出来的节点，要有 dataset
+ * @param {string|number|null} [messageId]
+ */
+function markTurn(turn, messageId = null) {
+  if (!turn || !turn.dataset) return turn;
+  const id = messageId == null ? '' : String(messageId).trim();
+  if (id) {
+    turn.dataset.turnKey = `m:${id}`;
+    return turn;
+  }
+  turnKeySeq += 1;
+  turn.dataset.turnKey = `t${turnKeySeq}`;
+  return turn;
+}
+
+/** 忽略大小写与空白差异：搜索词里的空格位置和渲染出来的文本几乎不会一模一样。 */
+function normalizeTurnText(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, '').toLowerCase();
+}
+
+/** 节点是否带某个 class；不依赖 querySelector。 */
+function turnHasClass(node, name) {
+  const list = node && node.classList;
+  if (list && typeof list.contains === 'function') return list.contains(name);
+  const cls = typeof node?.className === 'string' ? node.className : '';
+  return cls.split(/\s+/).includes(name);
+}
+
+/** 遍历步数上限：DOM 正常是树，但假节点之间可能成环，封顶保证最坏情况也能收场。 */
+const MAX_TURN_SCAN_STEPS = 50000;
+
+/**
+ * 在消息区里按文本找「第一个命中的一轮」。
+ *
+ * 为什么不用 querySelectorAll：仓库的测试用假 DOM（tests/support/app_harness.mjs）
+ * 只实现了极简查询，别处甚至可能根本没有；这里要的又只是「深度优先、命中就停」。
+ * 环保护（Set + 步数上限）是给互相引用的假节点兜底的。
+ *
+ * @param {Element|null} container 消息区（#transcript）
+ * @param {string} query 搜索词；忽略大小写与空白差异
+ * @returns {Element|null} 命中的 .turn 根节点
+ */
+export function findTurnByText(container, query) {
+  const needle = normalizeTurnText(query);
+  if (!container || !needle) return null;
+
+  const seen = new Set();
+  const stack = [container];
+  let steps = 0;
+
+  while (stack.length) {
+    steps += 1;
+    if (steps > MAX_TURN_SCAN_STEPS) return null;
+    const node = stack.pop();
+    if (!node || seen.has(node)) continue;
+    seen.add(node);
+
+    if (turnHasClass(node, 'turn')) {
+      // 占位块（正在思考）不是消息，命中了也不能当落点。
+      if (!turnHasClass(node, 'pending-tip') && normalizeTurnText(node.textContent).includes(needle)) {
+        return node;
+      }
+      // 一轮的根节点就是落点，不必再往它的子孙里找。
+      continue;
+    }
+
+    const kids = node.children;
+    if (!kids || typeof kids.length !== 'number') continue;
+    // 逆序压栈，出栈顺序才是文档顺序。
+    for (let i = kids.length - 1; i >= 0; i -= 1) stack.push(kids[i]);
+  }
+  return null;
+}
+
+/**
+ * @param {object} [options]
+ * @param {ChatRendererState} [options.state] 流式渲染状态（turn / textEl / streamingRaw / mood…），装配层注入
+ *   web/renderer-state.js 的实例；只放「一轮画到哪儿了」，不含应用级字段。
+ * @param {ChatRendererAppState|null} [options.appState] 应用级状态（session / principal / agentName / userName /
+ *   currentAgent）：署名、头像、卡片归属快照要从这里读。不传就退回 state——单测里
+ *   「一个对象装两类状态」的老写法继续有效。
+ * @param {(id: string) => HTMLElement|null} [options.getElement] 按 id 取节点（装配层传 document.getElementById）
+ * @param {(() => ChatRendererHistoryView)|null} [options.getHistoryView] 历史容器（append / isPrepending /
+ *   noteProgrammaticScroll）
+ * @param {ChatRendererCardController|null} [options.cardController] 卡片渲染
+ * @param {ChatRendererFileUrls|null} [options.fileUrls] 会话文件的两个地址（file-urls.js 的实例）
+ * @param {Function} [options.paintAvatar]
+ * @param {Function} [options.agentAvatarUrlById]
+ * @param {Function} [options.userAvatarUrl]
+ * @param {(msg: string) => void} [options.flash]
  * @param {(busy: boolean) => void} [options.onBusyChange] 一轮结束/重置时通知输入区
  * @param {(fn: Function, ms: number) => any} [options.setTimer] 防呆计时器（占位块的 30 秒），
  *   默认 globalThis.setTimeout。留成可注入的只是为了让假时钟测试能断言时长。
@@ -50,9 +239,16 @@ const resourceUrl = resourceContentUrl;
  * @param {((entry: object) => boolean)|null} [options.renderSubagent]
  *   子代理（分身）卡片的历史回放，装配时注入 subagent-view.js 的 render。
  *   同样是「只接函数、不 import」：没注入就照旧跳过这种 entry。
+ * @param {((node: Element) => void)|null} [options.onBlocksRendered] 每次有新节点上屏后补交互
+ *   （代码块复制按钮）。渲染器不认识复制模块，只把节点交出去；没注入就不补。
+ * @param {((items: Array<{src: string, alt: string}>, index: number) => void)|null} [options.openImageViewer]
+ *   全屏看图。装配层注入 (items, index) => void；没注入就退回旧的单张灯箱。
  */
 export function createChatRenderer({
   state,
+  // 应用级状态：渲染器自己那份 state 里只剩渲染进度，会话与身份得单独接进来。
+  // 不传就退回 state（老调用方/单测直接传一个 state 的写法行为不变）。
+  appState = null,
   getElement,
   getHistoryView,
   cardController,
@@ -73,6 +269,8 @@ export function createChatRenderer({
   openImageViewer = null,
 } = {}) {
   if (!state) throw new TypeError('createChatRenderer requires { state }');
+  // 应用级字段（会话、身份、署名）从哪读：装配层注入 S；没注入就是 state 自己。
+  const app = appState || state;
 
   // 历史回放专用：当前正在合并的那一轮（连续的 assistant 条目合成一个气泡）。
   // 实时路径不用它——实时本来就是一条流。
@@ -90,6 +288,10 @@ export function createChatRenderer({
    *
    * clearLiveTurn 与 preserveLiveTurn 的暂存/还原都只认这一张表：以后往实时轮里加字段，
    * 只要加到这里，就不会出现「清了但没暂存」的半截还原。
+   *
+   * 注解是必要的：不加时 TS 会把元组放宽成 `(string | boolean)[][]`，
+   * 于是 `state[key]` 里的 key 变成 `string | boolean`（布尔的字面量也是元素）。
+   * @type {ReadonlyArray<[string, any]>}
    */
   const LIVE_TURN_FIELDS = [
     ['turn', null],
@@ -171,9 +373,7 @@ export function createChatRenderer({
 
   /**
    * 历史页结束边界：本页的轮已经上屏，但一个都不能留在实时 state 里。
-   * preserveLiveTurn 为 true 且确实暂存过时，结尾再把实时轮指针原样放回去。
-   *
-   * @param {{preserveLiveTurn?: boolean}} [options]
+   * 只要有暂存就原样还原：preserveLiveTurn 只决定 begin 时要不要暂存，不决定这里要不要还。
    */
   function endHistoryPage() {
     // 没配对上的 end（重复调用、根本没 begin 过）不碰实时轮：否则第二次 end 会把刚还原的轮清掉。
@@ -190,6 +390,11 @@ export function createChatRenderer({
     return true;
   }
 
+  /**
+   * @param {any} entry 宿主历史里的一条：形状由宿主定，这里只按 type/role 分派，不替它立约
+   * @param {{sessionFiles?: Array}} [options] 当前页的会话文件，透传给卡片与控制层
+   * @returns {boolean} 是否画出了东西
+   */
   function renderEntry(entry, { sessionFiles } = {}) {
     if (!entry || typeof entry !== 'object') return false;
     // 子代理（分身）：宿主把 subagent 工具的 details 投影成 {type:'subagent'} 的块，
@@ -213,6 +418,8 @@ export function createChatRenderer({
     const msg = entry.message || entry;
     const role = msg.role || entry.role;
     if (!role) return false;
+    // 历史里的消息 id（全局索引）——turn 的稳定标记优先用它。
+    const msgId = entry.id ?? msg.id ?? null;
 
     const blocks = contentBlocks(msg);
     if (!blocks.length) return false;
@@ -241,6 +448,7 @@ export function createChatRenderer({
       // 历史回放：用消息自己的时间。以前这里没传，每条用户消息都显示成「当前时间」
       const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
       const userTurn = appendUser(text, merged, files, Number.isFinite(ts) ? ts : Date.now());
+      if (userTurn && msgId != null) markTurn(userTurn, msgId);
       // 本页之后的 file 块可以挂在这条 user 气泡上（宿主的 file 锚点常常就在 user 后面）。
       pageBody = userTurn ? userTurn.querySelector('.turn-body') : null;
       return true;
@@ -254,6 +462,8 @@ export function createChatRenderer({
       const resumed = Boolean(replayTurn);
       const turn = replayTurn || startAssistantTurn();
       replayTurn = turn;
+      // 合并进来的后续消息不重新打标：一轮只认开头那一条的身份。
+      if (!resumed && msgId != null) markTurn(turn, msgId);
       // 历史回放：思考时长是假的，只写「思考」不写秒数
       state.replaying = true;
       for (const b of blocks) {
@@ -313,11 +523,6 @@ export function createChatRenderer({
    */
   let viewMode = 'serene';
 
-  /** 计数只认正整数；脏值当 0。文案规则在 turn-summary.js，这里只做落位前的防御。 */
-  function countOf(value) {
-    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
-  }
-
   /**
    * 摘要文案的唯一出口：注入了就用注入的，没注入（单独建渲染器、极简嵌入）
    * 就退成一句最省事的话，保证不崩也不空白。
@@ -376,7 +581,7 @@ export function createChatRenderer({
   }
 
   // 历史消息的署名用会话自己的 agent；只有新会话还没回填时才退回全局
-  const agentLabel = () => state.session?.agentName || state.agentName || 'Hana';
+  const agentLabel = () => app.session?.agentName || app.agentName || 'Hana';
 
   /**
    * 把一帧消息挂进消息区。正常走 historyView.append（「加载更早」时它负责插到锚点前），
@@ -417,19 +622,14 @@ export function createChatRenderer({
     view?.noteProgrammaticScroll?.();
   }
 
-  function clockText(ts = Date.now()) {
-    const d = new Date(ts);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  }
-
   function turnHead(role, name) {
     const head = el('div', 'turn-head');
     const av = el('div', `avatar ${role === 'user' ? 'avatar-user' : 'avatar-agent'}`);
     // 助手头像跟会话的 agent 走；用户头像就是本人那张
     paintAvatar(av, {
-      url: role === 'user' ? userAvatarUrl() : agentAvatarUrlById(state.session?.agentId || state.currentAgent?.id),
+      url: role === 'user' ? userAvatarUrl() : agentAvatarUrlById(app.session?.agentId || app.currentAgent?.id),
       name,
-      fallback: role === 'user' ? state.userName || name : name,
+      fallback: role === 'user' ? app.userName || name : name,
     });
     head.appendChild(av);
     // 自己的消息不报名字，头像就够
@@ -452,6 +652,8 @@ export function createChatRenderer({
    */
   function newTurn(role, name) {
     const turn = el('div', `turn ${role}`);
+    // 先给个序号标记；历史回放拿到消息 id 之后会覆盖成 m:<id>（见 renderEntry）。
+    markTurn(turn);
     turn.appendChild(turnHead(role, name));
     const main = el('div', 'turn-main');
     const body = el('div', 'turn-body');
@@ -565,7 +767,7 @@ export function createChatRenderer({
 
   function appendUser(text, images = [], files = [], ts = Date.now(), references = []) {
     resetTurnState();
-    const { turn, main, body } = newTurn('user', state.userName);
+    const { turn, main, body } = newTurn('user', app.userName);
 
     // 宿主注入的引用块（[hana_reference] 等）以前被整段剔掉，桌面看得到的引用手机上完全看不到。
     // 现在画成可折叠卡片，放在正文上方。
@@ -682,6 +884,7 @@ export function createChatRenderer({
     }
 
     const node = el('div', 'turn assistant pending-tip');
+    markTurn(node);
     // 读屏软件也该知道「对方正在输入」，但不要抢焦点
     node.setAttribute('role', 'status');
     node.setAttribute('aria-live', 'polite');
@@ -927,7 +1130,7 @@ export function createChatRenderer({
     const content = String(text ?? '').trim();
     if (!content) return null;
     if (state.turn) finishTurn(Date.now());
-    const built = newTurn('user', state.userName);
+    const built = newTurn('user', app.userName);
     const bubble = el('div', 'bubble-user');
     bubble.innerHTML = renderMarkdown(content);
     decorateBlocks(bubble);
@@ -935,12 +1138,6 @@ export function createChatRenderer({
     built.main.appendChild(turnFoot(ts));
     scrollToBottom(true);
     return built.turn;
-  }
-
-  /** 思考时长的人话写法：不足 1 秒不值得报数。 */
-  function thinkLabel(sec) {
-    if (!(sec >= 1)) return '思考';
-    return `思考了 ${sec < 10 ? sec.toFixed(1) : Math.round(sec)} 秒`;
   }
 
   function addThinking(text, turn = state.turn) {
@@ -985,31 +1182,6 @@ export function createChatRenderer({
     d._think = thinkLabel(d._thinkTotal);
     state.thinkAt = 0;
     paintMeta(d);
-  }
-
-  /**
-   * 把工具名变成人能读的样子。
-   *
-   * 服务端发的原始名形如：
-   *   app__twinkstar_web_access__twinkstar_web_access_bro_006a28b90908
-   * 前缀、宿主 id、调用 hash 对用户都没意义，抽出真正的名字，剩下的交给 CSS 省略。
-   */
-  function prettyToolName(raw) {
-    let s = String(raw || 'tool').trim();
-    if (!s) return 'tool';
-    s = s.replace(/^(app|mcp|plugin)__/, '');
-    s = s.replace(/[_-][0-9a-f]{6,}$/i, '');   // 尾部调用 id
-    s = s.replace(/[_-]bro$/i, '');
-    // 不能写成 /^(.+?)[ _-]\1$/：分孪组里允许含分隔符时，回退是致命的（一长串重复字符
-    // 能把主线程卡死）。把首段限定成「不含分隔符」就是线性的。
-    const dup = s.match(/^([^ _-]{1,64})[ _-]\1$/);
-    if (dup) s = dup[1];
-    // 还可能是 `A__A` 这种双下划线分段重复（app id 与 tool 前缀同名时的常见形态）
-    const parts = s.split('__').map((p) => p.replace(/[_-]+/g, ' ').trim()).filter(Boolean);
-    const uniq = parts.filter((p, i) => p !== parts[i - 1]);
-    s = uniq.join(' ');
-    s = s.replace(/\s+/g, ' ').trim();
-    return s || String(raw || 'tool');
   }
 
   /** 图标与勾叉只是装饰：读屏软件念出来只会打乱「谁做了什么」的节奏。 */
@@ -1116,10 +1288,10 @@ export function createChatRenderer({
       if (words) verbEl.textContent = words;
     }
     const markEl = target.querySelector('.op-mark');
-    if (markEl) markEl.textContent = failed ? '✗' : '✓';
+    if (markEl) markEl.textContent = toolMark(failed);
 
     const stateEl = target.querySelector('.state');
-    if (stateEl) stateEl.textContent = failed ? '失败' : '完成';
+    if (stateEl) stateEl.textContent = toolStateText(failed);
     if (failed) d._failed = countOf(d._failed) + 1;
     paintMeta(d);
     return true;
@@ -1251,9 +1423,9 @@ export function createChatRenderer({
         onOpen: () => {
           // 解析是异步的：先钉住这次点击属于哪个会话、哪个登录身份。
           // 晚到的成功/失败都属于旧页面（切会话、返回列表、退出登录），一律丢弃。
-          const owner = state.principal;
-          const session = state.session;
-          const stillHere = () => state.principal === owner && state.session === session;
+          const owner = app.principal;
+          const session = app.session;
+          const stillHere = () => app.principal === owner && app.session === session;
           // 正文照常可点开：读地址（资源地址也行）和下载地址是两回事。
           fileUrls.forFile(f).then(({ readUrl, downloadUrl }) => {
             if (!stillHere()) return;
@@ -1316,9 +1488,9 @@ export function createChatRenderer({
 
   function appendCard(ev, { sessionFiles = [] } = {}) {
     const sessionSnapshot = {
-      sessionId: state.session?.sessionId || null,
-      sessionPath: state.session?.path || null,
-      agentId: state.session?.agentId || null,
+      sessionId: app.session?.sessionId || null,
+      sessionPath: app.session?.path || null,
+      agentId: app.session?.agentId || null,
     };
     const cardNode = cardController.render(ev, sessionSnapshot, { sessionFiles });
     getHistoryView().append(cardNode);
@@ -1333,19 +1505,13 @@ export function createChatRenderer({
     state.speed = 0;
   }
 
-  /** 尾注里的数字：边跑边补，不占正文空间。 */
+  /** 尾注里的数字：边跑边补，不占正文空间。文案与四舍五入在 renderer-stats.js。 */
   function paintFootStats() {
     const foot = state.turnFootEl;
     if (!foot) return;
     const box = foot.querySelector('.foot-stats');
     if (!box) return;
-    const parts = [];
-    if (state.firstTokenMs) {
-      const s = state.firstTokenMs / 1000;
-      parts.push(`首响 ${s < 10 ? s.toFixed(1) : Math.round(s)} s`);
-    }
-    if (state.speed) parts.push(`${state.speed < 100 ? state.speed.toFixed(1) : Math.round(state.speed)} 字/s`);
-    box.textContent = parts.length ? ` · ${parts.join(' · ')}` : '';
+    box.textContent = footStatsText({ firstTokenMs: state.firstTokenMs, speed: state.speed });
   }
 
   function markStreamStart() {
@@ -1359,10 +1525,14 @@ export function createChatRenderer({
   }
 
   function markTurnEnd() {
-    if (state.firstTokenMs && state.charCount > 40) {
-      const seconds = (performance.now() - state.turnStart - state.firstTokenMs) / 1000;
-      if (seconds > 0.2) state.speed = state.charCount / seconds;
-    }
+    // 门槛（不足 40 字、或扣掉首响不足 0.2 秒）在 speedOf 里；返回 0 表示样本不够，
+    // 这时保留上一次的速度，不当成「速度为零」。
+    const speed = speedOf({
+      firstTokenMs: state.firstTokenMs,
+      charCount: state.charCount,
+      elapsedMs: performance.now() - state.turnStart,
+    });
+    if (speed) state.speed = speed;
     paintFootStats();
   }
 
@@ -1411,6 +1581,22 @@ export function createChatRenderer({
     markFirstToken,
     markTurnEnd,
     endStaleStreamingTurns,
+    // 外部访问器：流式渲染状态现在归渲染器私有（web/renderer-state.js），
+    // 事件路由 / 会话控制 / 输入区从这里读和写，不再直接碰 state 的内部字段。
+    // 只加不改——上面那些方法的签名与语义都没动。
+    hasTurn: () => Boolean(state.turn),
+    paintCurrentMeta: () => (state.turnMeta ? paintMeta(state.turnMeta) : undefined),
+    noteChars: (n) => {
+      state.charCount += Number(n) || 0;
+    },
+    currentStreamingRaw: () => state.streamingRaw,
+    noteSendStart: () => {
+      state.turnStart = performance.now();
+    },
+    clearMood: () => {
+      state.moodEl = null;
+      state.moodRaw = '';
+    },
     // 调试/测试常用的两个
     mediaGrid,
     openLightbox,

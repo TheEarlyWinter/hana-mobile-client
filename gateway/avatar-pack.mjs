@@ -27,6 +27,10 @@
  * 是瞬时故障，缓存它们会让一次打嗝变成两分钟没头像，所以那些不缓存、下次重新试。
  * 304 判定完全基于这份缓存：缓存命中时不再发任何上游请求，只算 body 的 hash。
  *
+ * 冷启动并发：`<身份哈希>\n<id>` 的在途回源会合并——页面同时开两屏、或者一次重试
+ * 赶上上一次还没回来，不会让上游被同一个 id 打两遍。合并的只是「正在进行的这一次」，
+ * 落定即从表里摘掉：成功已经进了上面的 LRU，失败留不留由 CACHEABLE_FAILURE_REASONS 决定。
+ *
  * 纯逻辑为主（解析/序列化/缓存都能单独测），只有 `createAvatarPack` 里的
  * `requestAvatar` 碰网络，测试可注入 upstream / timeoutMs / 并发数。
  */
@@ -34,6 +38,7 @@
 import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { UPSTREAM } from './config.mjs';
+import { etagMatches } from './etag.mjs';
 import { checkReadAuth, denyRead } from './upstream-access.mjs';
 
 /** 精确路径：与 server.mjs 的路由判定共用一份，避免两处写字面量写漂。 */
@@ -140,23 +145,6 @@ export function toDataUrl(mime, bytes) {
 export function etagForBody(body) {
   const hash = createHash('sha256').update(body, 'utf8').digest('hex').slice(0, 16);
   return `W/"${hash}"`;
-}
-
-function etagToken(value) {
-  return String(value).trim().replace(/^W\//, '').replace(/^"|"$/g, '');
-}
-
-/** `if-none-match` 可能是列表或 `*`，一律按弱比较（我们只发弱 etag）。 */
-export function etagMatches(headerValue, etag) {
-  if (typeof headerValue !== 'string' || !headerValue.trim()) return false;
-  const target = etagToken(etag);
-  for (const part of headerValue.split(',')) {
-    const token = part.trim();
-    if (!token) continue;
-    if (token === '*') return true;
-    if (etagToken(token) === target) return true;
-  }
-  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -314,6 +302,11 @@ function cookieIdentityOf(cookie) {
   return createHash('sha256').update(String(cookie || ''), 'utf8').digest('hex');
 }
 
+/** 缓存与在途合并共用一个键：Cookie 身份哈希 + id。不同账号绝不共享同一条。 */
+function entryKey(identity, id) {
+  return `${identity}\n${id}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* 端点                                                                */
 /* ------------------------------------------------------------------ */
@@ -351,13 +344,16 @@ export function createAvatarPack({
   now = () => Date.now(),
 } = {}) {
   const cache = createAvatarCache({ ttlMs: cacheTtlMs, maxEntries: cacheMaxEntries, now });
+  /**
+   * `<身份哈希>\n<id>` → 在途 Promise。只装「正在进行的回源」，落定即摘（见 fetchAvatar）：
+   * 留着成功值是多余的——LRU 已经有一份，TTL 与容量由它管；
+   * 留着失败值更糟：一次超时会变成后来每一个请求的结果。
+   * 条目数天然被在途请求约束（每个正在抓的 id 一条），不需要额外的淘汰逻辑。
+   */
+  const inflight = new Map();
 
-  /** 抓一张并按「是否确定性失败」决定要不要记住结果。 */
-  async function resolveAvatar({ identity, id, cookie, userAgent }) {
-    const key = `${identity}\n${id}`;
-    const hit = cache.get(key);
-    if (hit) return hit;
-
+  /** 回源一次并落缓存。永远 resolve 成一条缓存条目，同键并发共享这个 Promise。 */
+  async function fetchAvatar({ key, id, cookie, userAgent }) {
     const outcome = await requestAvatar({
       upstream,
       timeoutMs,
@@ -375,6 +371,25 @@ export function createAvatarPack({
     const entry = { dataUrl: null, mime: null, ts: now(), reason: outcome.reason };
     if (CACHEABLE_FAILURE_REASONS.has(outcome.reason)) cache.set(key, entry);
     return entry;
+  }
+
+  /** 抓一张并按「是否确定性失败」决定要不要记住结果；同一键的在途回源只发一次。 */
+  async function resolveAvatar({ identity, id, cookie, userAgent }) {
+    const key = entryKey(identity, id);
+    const hit = cache.get(key);
+    if (hit) return hit;
+
+    const pending = inflight.get(key);
+    if (pending) return pending;
+
+    // 从上面的 get 到这里之间没有 await：同一 tick 里不会有两个调用者都走到这里。
+    let task;
+    task = fetchAvatar({ key, id, cookie, userAgent }).finally(() => {
+      // 成功/失败都要摘：失败若留在表里，后来的请求会一直拿到那次失败（超时尤其明显）。
+      if (inflight.get(key) === task) inflight.delete(key);
+    });
+    inflight.set(key, task);
+    return task;
   }
 
   async function handle(req, res) {
@@ -413,7 +428,7 @@ export function createAvatarPack({
     const entries = new Array(ids.length).fill(null);
     const misses = [];
     for (let i = 0; i < ids.length; i += 1) {
-      const hit = cache.get(`${identity}\n${ids[i]}`);
+      const hit = cache.get(entryKey(identity, ids[i]));
       if (hit) entries[i] = hit;
       else misses.push(i);
     }

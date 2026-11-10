@@ -303,6 +303,24 @@ t('根节点被页面清掉后还能自愈显示（退出登录后错误不能�
   assert.ok(rootToasts().map(textOf).includes('新错误'), '而且内容要看得见');
 });
 
+t('dismiss(id)：只关那一条，别的还在；id 不存在时什么都不做', () => {
+  reset();
+  const first = toaster.show('配置没加载成功', { detail: 'Failed to fetch' });
+  const second = toaster.show('上传失败：文件太大');
+  assert.equal(rootToasts().length, 2);
+
+  toaster.dismiss(first.id);
+  assert.equal(rootToasts().length, 1, '只该少一条');
+  assert.equal(textOf(rootToasts()[0]), '上传失败：文件太大', '留的必须是另一条');
+
+  toaster.dismiss(first.id);
+  toaster.dismiss(999999);
+  assert.equal(rootToasts().length, 1, '重复关或关不存在的 id 不能误伤其它提示');
+
+  toaster.dismiss(second.id);
+  assert.equal(rootToasts().length, 0);
+});
+
 t('dispose()：摘掉整棵树、清计时器，之后不再响应', () => {
   reset();
   toaster.show('提示，稍后消失', { level: 'info' });

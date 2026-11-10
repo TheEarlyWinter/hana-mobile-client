@@ -227,30 +227,6 @@ html, body {
   cursor: pointer;
 }
 
-.login-switch-btn:disabled { opacity: 0.45; }
-
-.login-switch-btn {
-  width: 100%;
-  min-height: 40px;
-  margin-bottom: var(--space-10);
-  padding: var(--space-10) var(--space-12);
-  border: 1px solid var(--border-soft, rgba(122, 96, 88, 0.14));
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-muted, #6B6F73);
-  font-family: inherit;
-  font-size: var(--fs-caption);
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
-}
-.login-switch-btn:active {
-  background: var(--accent-light, rgba(83, 125, 150, 0.08));
-  color: var(--accent, #537D96);
-}
-.login-switch-btn:focus-visible {
-  outline: 2px solid var(--accent, #537D96);
-  outline-offset: 1px;
-}
-
 /* ---------------- 主页 (苹果浅色液态风格) ---------------- */
 
 .view-home {
@@ -2740,4 +2716,21 @@ img.subagent-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 搜索命中：从搜索结果点进来时，让那一条自己闪一下再淡下去。
+   只用背景色和 outline，不改布局高度——聊天区是虚拟滚动手感，任何高度变化都会让锚点漂。 */
+.search-hit-flash {
+  animation: search-hit-flash 1.6s ease-out 1;
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+@keyframes search-hit-flash {
+  0%   { background: color-mix(in srgb, var(--accent, #3b82f6) 28%, transparent); }
+  70%  { background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-hit-flash { animation: none; background: color-mix(in srgb, var(--accent, #3b82f6) 14%, transparent); }
 }

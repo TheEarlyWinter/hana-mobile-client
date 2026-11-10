@@ -78,8 +78,8 @@ function toSessionList(raw, namespace) {
 /**
  * 创建会话列表控制器。
  *
- * @param {object} options
- * @param {(pathname: string) => Promise<any>} options.api 同源请求函数（如 http-client 的 api）
+ * @param {object} [options]
+ * @param {(pathname: string) => Promise<any>} [options.api] 同源请求函数（如 http-client 的 api）
  * @param {'home'|'code'} [options.initialNamespace='home'] 初始筛选
  * @param {(namespace: string) => void} [options.onLoading] 每次 load 开始
  * @param {(list: object[], namespace: string) => void} [options.onLoaded] 获胜请求成功

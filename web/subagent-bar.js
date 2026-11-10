@@ -176,6 +176,20 @@ function initialOf(entry) {
   return /[a-zA-Z]/.test(name[0]) ? name[0].toUpperCase() : name[0];
 }
 
+/**
+ * 造一条「谁在干活」的胶囊。
+ *
+ * 形参里 `document: doc` 是重命名解构且没有默认值，tsc 推 JS 形参时会把它漏掉（同 makeAction
+ * 的 available）；不写下面这份 JSDoc 参数块，装配处传 document 就会被当成多余属性。
+ *
+ * @param {object} [options]
+ * @param {Document} [options.document] 建节点用；测试夹具可注入假 document
+ * @param {Element|null} [options.mount] 挂载点，没有就整体降级
+ * @param {(agentId: string) => string|null} [options.avatarUrlById] 头像地址来源
+ * @param {(target: object) => void} [options.onOpen] 点胶囊时的回调（打开详情 sheet）
+ * @param {{ now?: () => number, setInterval?: Function, clearInterval?: Function }} [options.clock]
+ *   计时与定时器来源（测试不用等真实时间）
+ */
 export function createSubagentBar({ document: doc, mount = null, avatarUrlById = null, onOpen = null, clock = null } = {}) {
   const entries = new Map();
   // 终态与计时起点：胶囊收掉、甚至 clearChips() 之后仍然记得（见 createTaskMemory）。

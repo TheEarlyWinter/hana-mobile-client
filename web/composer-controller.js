@@ -31,26 +31,102 @@ import {
 } from './attach.js';
 import { createApiClient } from './http-client.js';
 import { createSendController } from './send-controller.js';
+import { createAbortQueue } from './abort-queue.js';
+import { createEchoGuard } from './echo-guard.js';
+
+/* 下面的 typedef 是注入的「袋子」的契约，按本文件实际读写的字段收：
+ * 以前一律写成 @param {object}，读 state.attach / sockets.send 时 tsc 只能说
+ * 「object 上没有这个属性」，真写错字段名反而看不出来。
+ */
 
 /**
- * @param {object} options
- * @param {object} options.state 共享状态对象
- * @param {(id: string) => Element|null} options.getElement
- * @param {object} options.renderer chat-renderer 实例
- * @param {object} options.sockets websocket-client 实例
- * @param {object} options.streamState 流式游标
- * @param {(msg: string) => void} options.flash
- * @param {(ms?: number) => Promise<boolean>} options.waitForReady 等连接就绪
- * @param {(el: Element) => void} options.autoGrow 输入框自适应高度
+ * 输入区读写的应用级状态（app.js 的 S）。
+ *
+ * 只列本模块真正读/写的字段；S 上还有 sessions / ws / memoryOn 这类别处才用的东西，
+ * 结构化类型不看它们。attach / homeAttach 会被整数组换掉，所以是「可写字段」。
+ *
+ * @typedef {object} ComposerState
+ * @property {Array<any>} attach 聊天页的附件托盘（项的形状由 attach.js 定）
+ * @property {Array<any>} homeAttach 首页浮岛自己的附件托盘
+ * @property {number} attachSeq 附件自增序号（拼 id 用）
+ * @property {boolean} busy 是否在生成（决定主键是发送 / 插话 / 停止）
+ * @property {boolean} wsReady 连接是否就绪
+ * @property {{path: string, sessionId?: string|null}|null} session 当前会话；没开会话时为 null
+ */
+
+/**
+ * chat-renderer 实例里输入区用到的那几个方法。
+ *
+ * 没列全（渲染器导出更多），但这里只写本模块真正调的：窄接口夹具只要有这几个就够。
+ *
+ * @typedef {object} ComposerRenderer
+ * @property {(text: string, isError?: boolean) => void} appendSystem
+ * @property {() => void} finishTurn
+ * @property {(text: string) => any} appendInterjection
+ * @property {(text: string, images?: Array<any>, files?: Array<any>) => any} appendUser
+ * @property {() => void} clearStats
+ * @property {() => void} noteSendStart 本轮计时起点（窄接口夹具可能没有，调之前先问）
+ * @property {(force?: boolean) => void} scrollToBottom
+ */
+
+/**
+ * websocket-client 实例里输入区用到的那几个方法。
+ * @typedef {object} ComposerSockets
+ * @property {(frame: object) => boolean} send 连接不是 OPEN 时返回 false 且不丢帧
+ * @property {(delay?: number) => void} scheduleReconnect
+ * @property {ComposerAbortQueue | null} [abortQueue] 断线时「停止」的待补发队列：composer 写、websocket-client 补发，
+ *   两边必须是同一个实例（没单独注入时本模块就是从这里拿的）。websocket-client 的注入参数已改成
+ *   结构化声明，所以这里可以写实例类型，不再是 object。
+ */
+
+/**
+ * 断线时「停止」的待补发队列（web/abort-queue.js 的实例）。同一时刻最多一条。
+ * @typedef {object} ComposerAbortQueue
+ * @property {() => any} peek 看当前条目（不取走）
+ * @property {(pending: object) => boolean} push 入队；已有则覆盖
+ * @property {() => void} clear 清空
+ */
+
+/**
+ * 流式游标（web/stream-state.js 的实例）。输入区只用它取 abort 帧里的 streamId。
+ * @typedef {object} ComposerStreamState
+ * @property {() => {streamId: string|null, lastSeq: number}} snapshot
+ */
+
+/**
+ * 「刚发出去的那条」记账（web/echo-guard.js 的实例）。输入区只负责记一笔，核销在 event-router。
+ * @typedef {object} ComposerEchoGuard
+ * @property {(inputId: string, text: string) => void} noteSent
+ */
+
+/**
+ * @param {object} [options]
+ * @param {ComposerState} [options.state] 共享状态对象（app.js 的 S）
+ * @param {(id: string) => HTMLElement|null} [options.getElement] 按 id 取节点（装配层传 document.getElementById）
+ * @param {ComposerRenderer} [options.renderer] chat-renderer 实例
+ * @param {ComposerSockets} [options.sockets] websocket-client 实例
+ * @param {ComposerAbortQueue|null} [options.abortQueue] 断线时「停止」的待补发队列（与 sockets 共用同一个实例）；缺省自建
+ * @param {ComposerStreamState} [options.streamState] 流式游标
+ * @param {(msg: string) => void} [options.flash]
+ * @param {(ms?: number, shouldCancel?: () => boolean) => Promise<boolean>} [options.waitForReady] 等连接就绪；
+ *   第二个参数是取消条件，返回 true 就提前结束等待（切会话场景要用，否则会白等满轮询超时）
+ * @param {(el: Element) => void} [options.autoGrow] 输入框自适应高度
  * @param {(pathname: string, init?: object) => Promise<any>} [options.api] 上传用的 JSON 客户端；默认自建一份
  * @param {() => any} [options.captureQuote] 发送发起时取引用版本（与正文快照同一 tick）
  * @param {(token: any) => void} [options.consumeQuote] 发送成功后按版本消费引用
+ * @param {(text: string) => string} [options.prepareOutgoingText] 把引用拼进正文（输入框里只留用户写的字）
+ * @param {(() => void)|null} [options.onDraftCleared] 发送成功后的收尾（清草稿、标记历史过期）
+ * @param {ComposerEchoGuard|null} [options.echoGuard] 刚发出去的那条记在哪儿（与 event-router 共用同一个
+ *   实例，见 web/echo-guard.js）；缺省按 state 自建一份，老单测直接读写 state.sentInputs 仍然有效
  */
 export function createComposer({
   state,
   getElement,
   renderer,
   sockets,
+  // 断线时点的「停止」排在哪儿。生产装配（app.js）把同一个队列实例也交给 websocket-client：
+  // 这里写、那里补发。老单测不传就给一个自己的：只有本模块读的路径仍能跑。
+  abortQueue = null,
   streamState,
   flash,
   waitForReady,
@@ -65,12 +141,24 @@ export function createComposer({
   // 发送成功（已写帧）后才 consumeQuote；失败路径不碰引用。
   captureQuote = null,
   consumeQuote = null,
+  // 「刚发出去的那条」：服务端回显时靠它去重（event-router 读同一份）。生产装配注入同一个实例；
+  // 老单测不传就按 state 自建，读写落回 state.sentInputs / state.lastLocalUser。
+  echoGuard = null,
 } = {}) {
   if (!state) throw new TypeError('createComposer requires { state }');
 
   // 上传大文件要等得比普通请求久：9MB 的字节走 base64 要 12MB 请求体，
   // 手机流量下 90 秒不一定够（网关到上游是流式转发，只有空闲 60 秒才断）。
   const uploadApi = typeof api === 'function' ? api : createApiClient({ timeoutMs: 180000 });
+
+  // 断线时点的「停止」排在哪儿。生产装配（app.js）把同一个队列实例也交给 websocket-client：
+  // 这里写、那里补发。没传就跟 sockets 要它自己那个（两者仍然是一份存储）；
+  // 连 sockets 都没有的老单测才自建一个——那种场景不会跨模块看这个队列。
+  const aborts = abortQueue || (sockets && sockets.abortQueue) || createAbortQueue();
+
+  // 发出去的那条记在这儿。没注入就按 state 自建：老单测直接构造 state 并读
+  // state.sentInputs / state.lastLocalUser，缺省这一份读写的就是它们。
+  const echo = echoGuard || createEchoGuard(state);
 
   /** 文件正在上传：这段时间不允许再次发送（否则同一文件会传两遍）。 */
   let uploading = false;
@@ -137,7 +225,8 @@ export function createComposer({
   function abortTurn() {
     if (!state.session) return;
     // 已经在等重连补发：不要重复排队、也不要重复提示。
-    if (state.pendingAbort && state.pendingAbort.sessionPath === state.session.path) return;
+    const queued = aborts.peek();
+    if (queued && queued.sessionPath === state.session.path) return;
     const { streamId } = streamState.snapshot();
     const sent = sockets.send({
       type: 'abort',
@@ -148,7 +237,7 @@ export function createComposer({
     if (!sent) {
       // 连接没打开时 send 返回 false。以前照样 finishTurn()：用户看到「已停止」，
       // 服务端其实还在跑。这里只把 abort 排进待发队列，本地保持生成态，等连接恢复补发。
-      sockets.setPendingAbort({
+      aborts.push({
         sessionPath: state.session.path,
         sessionId: state.session.sessionId || null,
         streamId: streamId || null,
@@ -157,7 +246,7 @@ export function createComposer({
       sockets.scheduleReconnect(0);   // 立刻重连，不要等 8 秒的重连退避
       return;
     }
-    state.pendingAbort = null;
+    aborts.clear();
     renderer.finishTurn();
   }
 
@@ -246,12 +335,8 @@ export function createComposer({
         }
       }
 
-      state.sentInputs.add(inputId);
-      if (state.sentInputs.size > 32) {
-        const oldest = state.sentInputs.values().next().value;
-        if (oldest) state.sentInputs.delete(oldest);
-      }
-      state.lastLocalUser = { text, at: Date.now() };
+      // 自己发的这条记一笔：服务端把它回显回来时，event-router 靠这份记录吞掉重复气泡。
+      echo.noteSent(inputId, text);
 
       if (delivery === 'steer') {
         // 插话当场画进正文：用户看得见自己那句落在哪，而不是只闪一条提示。
@@ -266,7 +351,9 @@ export function createComposer({
         .map((a) => ({ fileId: a.fileId, label: a.name }));
       renderer.appendUser(text, imageShown, files);
       renderer.clearStats();
-      state.turnStart = performance.now();
+      // 本轮计时起点归渲染器私有状态（renderer-state.js）；窄接口夹具的 renderer
+      // 没有这个方法，与上面 appendInterjection 一样先问一句再调。
+      if (typeof renderer.noteSendStart === 'function') renderer.noteSendStart();
 
       setBusy(true);
     },
@@ -289,7 +376,10 @@ export function createComposer({
     })();
   }
 
-  /** 日报追问走同一单飞、WS wait 与 commit 管线，但不读取或结算普通聊天编辑状态。 */
+  /**
+   * 日报追问：正文由调用方给，feed / isCurrent 原样交给 send-controller。
+   * @param {{text?: string, feed?: any, isCurrent?: any}} [prepared]
+   */
   function sendPrepared({ text, feed, isCurrent } = {}) {
     const question = typeof text === 'string' ? text : '';
     return sendController.send({
@@ -719,10 +809,31 @@ export function createComposer({
     addFiles(files);
   });
 
+  /**
+   * 外部往输入框里塞一段字（系统分享进来、以后也可能有别的来源）。
+   * 不直接写 draft-store：先改 DOM 再主动派发 input，让草稿保存、发送按钮、计数这些
+   * 已有监听全部跑一遍——否则同一件事会有两套保存逻辑，迟早不一致。
+   */
+  function setText(text) {
+    const value = typeof text === 'string' ? text : '';
+    if (!value) return false;
+    inputEl.value = value;
+    autoGrow(inputEl);
+    syncSendButton();
+    try {
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      inputEl.focus();
+    } catch {
+      // 老 WebView 没有 Event 构造器：值已经进去了，草稿下次输入时再存
+    }
+    return true;
+  }
+
   return {
     hasDraft,
     setBusy,
     syncSendButton,
+    setText,
     abortTurn,
     sendMessage,
     sendPrepared,

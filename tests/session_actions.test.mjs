@@ -227,13 +227,22 @@ await t('isPinned：布尔、pinnedAt 都算置顶，脏值按未置顶', () => 
   assert.equal(isPinned(null), false);
 });
 
-await t('sameSession：路径为主身份，斜杠与大小写不敏感；只有 id 时按 id 对齐', () => {
+await t('sameSession：路径为主身份，盘符路径斜杠与大小写不敏感；只有 id 时按 id 对齐', () => {
   assert.equal(sameSession(rowA, { path: PATH_A.toLowerCase().replace(/\\/g, '/') }), true);
   assert.equal(sameSession(rowA, rowB), false);
   assert.equal(sameSession({ sessionId: 'sess_x' }, { sessionId: 'sess_x' }), true);
   assert.equal(sameSession({ sessionId: 'sess_x' }, { sessionId: 'sess_y' }), false);
   assert.equal(sameSession({ path: PATH_A }, { sessionId: 'sess_a' }), false, '一侧只有 id 时不能乱配');
   assert.equal(sameSession(null, rowA), false);
+});
+
+await t('sameSession：POSIX 路径保持大小写敏感（/work/A 与 /work/a 是两个会话）', () => {
+  const posix = { path: '/work/Proj/session.jsonl' };
+  assert.equal(sameSession(posix, { path: '/work/Proj/session.jsonl' }), true);
+  assert.equal(sameSession(posix, { path: String.raw`/work/Proj\session.jsonl` }), true, '反斜杠仍可归一到正斜杠');
+  assert.equal(sameSession(posix, { path: '/work/proj/session.jsonl' }), false, 'POSIX 大小写不同就是不同会话');
+  // Windows 盘符路径不受影响：大小写、斜杠都能对上
+  assert.equal(sameSession({ path: 'C:\\Work\\A.jsonl' }, { path: 'c:/work/a.jsonl' }), true);
 });
 
 /* ------------------------------------------------------------------ */

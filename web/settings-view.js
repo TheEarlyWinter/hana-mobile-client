@@ -77,8 +77,8 @@ const THEME_HINT = '跟随系统时，随手机的深浅设置自动切换。';
 /**
  * 创建设置视图管理器
  *
- * @param {object} options
- * @param {HTMLElement} options.container 外部传入的挂载容器（必选）
+ * @param {object} [options]
+ * @param {HTMLElement} [options.container] 外部传入的挂载容器（必选）
  * @param {Document} [options.document] Document 实例（单测可注入）
  * @param {Function} [options.onClose] 关闭面板回调
  * @param {Function} [options.onSelectModel] 选择模型回调 (modelId, provider) => void

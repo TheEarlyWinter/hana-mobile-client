@@ -9,8 +9,8 @@
  */
 
 /**
- * @param {object} options
- * @param {Document} options.document - DOM 工厂
+ * @param {object} [options]
+ * @param {Document} [options.document] - DOM 工厂
  * @param {(payload: {username: string, password: string}) => any} [options.onSubmit]
  * @param {() => void} [options.onSwitchLogin]
  * @returns {{ setState: (state?: {pending?: boolean, error?: string}) => void, clearSecrets: () => void, dispose: () => void }}

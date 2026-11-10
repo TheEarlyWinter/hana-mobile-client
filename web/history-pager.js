@@ -275,8 +275,8 @@ function parsePage(raw) {
 /**
  * 创建历史分页控制器。
  *
- * @param {object} options
- * @param {(pathname: string) => Promise<any>} options.api 同源请求函数
+ * @param {object} [options]
+ * @param {(pathname: string) => Promise<any>} [options.api] 同源请求函数
  * @param {number} [options.pageSize=50] 每页条数，1..200（超出按 200）
  * @param {(page: {entries: object[], prepend: boolean, hasMore: boolean, sessionFiles: object[]}) => void} [options.onPage]
  * @param {(state: {loading: boolean, hasMore: boolean, error: Error|null, phase: 'initial'|'older'}) => void} [options.onState]
@@ -284,6 +284,8 @@ function parsePage(raw) {
  *   （kind: 'open' 整页替换受 busy 保护，'older' 加载更早）；缺省按 'open' 处理
  * @param {{attempts?: number, delays?: number[], sleep?: (ms: number) => Promise<void>}} [options.retry]
  *   瞬时故障重试策略，默认 { attempts: 2, delays: [400, 1200], sleep: setTimeout }
+ * @param {(() => (object|null))} [options.extraQuery]
+ *   每次 open 额外拼的 query（例如网关尾部快照的 _nc 旁路）。只在 open 上生效，翻历史不参与。
  * @returns {{ open: (session: object, options?: {bypassBusy?: boolean}) => Promise<boolean>, loadOlder: () => Promise<boolean>, reset: () => void, dispose: () => void }}
  */
 export function createHistoryPager({
@@ -293,6 +295,7 @@ export function createHistoryPager({
   onState = () => {},
   canLoad = () => true,
   retry,
+  extraQuery = null,
 } = {}) {
   if (typeof api !== 'function') {
     throw new TypeError('createHistoryPager requires { api }');
@@ -332,6 +335,8 @@ export function createHistoryPager({
    * 退避重试期间被别的路径借用（'older' 显式排除）。
    */
   let forcedOpen = false;
+  /** 只给下一次 open 用的额外 query；每段请求结束时清空。 */
+  let oneShotExtra = null;
   // 最近一次请求的来源。reset/dispose 不归零：契约要求「无请求时沿用最近一次」，
   // 而且视图只在 error 非空时才读 phase。
   let phase = 'initial';
@@ -352,6 +357,13 @@ export function createHistoryPager({
     if (identity.path) query.set('path', identity.path);
     if (before != null) query.set('before', String(before));
     query.set('limit', String(limit));
+    // 一次性旁路：只给这一次 open 用，绝不粘到翻历史或下一次打开上。
+    if (oneShotExtra && typeof oneShotExtra === 'object') {
+      for (const [name, value] of Object.entries(oneShotExtra)) {
+        if (value === undefined || value === null) continue;
+        query.set(name, String(value));
+      }
+    }
     return `/api/sessions/messages?${query.toString()}`;
   }
 
@@ -559,10 +571,16 @@ export function createHistoryPager({
 
     loading = true;
     emitState();
+    // 这一次 open 的额外参数：bypassBusy（前台对账）或调用方声明的脏标记，
+    // 两者都会让网关绕过尾部快照，去上游拿真数据。
+    oneShotExtra = bypassBusy
+      ? { _nc: String(Date.now()) }
+      : (typeof extraQuery === 'function' ? extraQuery() : null);
     const pending = request(myEpoch, null, false);
     // finally 同时也覆盖「同步抛错后折成失败」与退避重试：一次 open 只放行一次。
     return pending.finally(() => {
       forcedOpen = false;
+      oneShotExtra = null;
     });
   }
 

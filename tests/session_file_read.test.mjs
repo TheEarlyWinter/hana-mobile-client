@@ -27,7 +27,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fsp from 'node:fs/promises';
-import { b64url as webB64url, createSessionFileUrls } from '../web/file-urls.js';
+import { b64url as webB64url, createSessionFileUrls, thumbUrlFor } from '../web/file-urls.js';
 import { buildWorkspaceContentUrl, matchWorkspaceByLabel, workspaceUrlForFile } from '../web/file-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -492,6 +492,55 @@ t('forFile：/gw/file 绝不进下载地址', async () => {
     downloadUrl === null || !downloadUrl.startsWith('/gw/file/'),
     '壳的下载白名单只认 workspace content，/gw/file 不能当下载地址',
   );
+});
+
+/* ------------------------------------------------------------------ */
+/* 缺陷 H6e：卡片缩略图的地址只能是按路径的 /gw/file                     */
+/* ------------------------------------------------------------------ */
+
+t('thumbUrlFor：图片 + filePath → 走 /gw/file（正文图片同一条路由）', () => {
+  const picPath = 'C:/work/workspace/out/pic.png';
+  assert.equal(thumbUrlFor({ filePath: picPath, ext: 'png' }), `/gw/file/${webB64url(picPath)}`);
+  // 宿主没给 ext 时从文件名取；大小写与体积都不影响
+  assert.equal(thumbUrlFor({ filePath: 'C:/work/workspace/pic.JPG', label: 'pic.JPG' }), `/gw/file/${webB64url('C:/work/workspace/pic.JPG')}`);
+  // 反斜杠路径原样编码（分词交给网关，不在前端归一化）
+  const win = 'C:\\Users\\Me\\pic.jpeg';
+  assert.equal(thumbUrlFor({ filePath: win, ext: 'jpeg' }), `/gw/file/${webB64url(win)}`);
+});
+
+t('thumbUrlFor：没有 filePath 一律 null —— 卡片不拿 fileId 去猜资源地址（H6e 的 400 源头）', () => {
+  // 条目只有 fileId：以前 forFile() 会退回 /api/resources/<id>/content，宿主对 agent 侧文件回 400
+  assert.equal(thumbUrlFor({ fileId: 'sf_3dd2c98b9dbc07fc', label: '图片.png', ext: 'png' }), null);
+  assert.equal(thumbUrlFor({ fileId: 'sf_3dd2c98b9dbc07fc', label: '图片.png' }), null);
+  assert.equal(thumbUrlFor({ filePath: '   ', ext: 'png' }), null);
+  assert.equal(thumbUrlFor({ filePath: '', ext: 'jpg' }), null);
+  assert.equal(thumbUrlFor(), null);
+});
+
+t('thumbUrlFor：非图片扩展名不给缩略图（/gw/file 会 403，<img> 只会是破图）', () => {
+  for (const ext of ['docx', 'pdf', 'xlsx', 'txt', 'svg', 'mp4', 'zip', '']) {
+    assert.equal(
+      thumbUrlFor({ filePath: `C:/work/workspace/a.${ext}`, ext }),
+      null,
+      `扩展名 ${ext || '(空)'} 不该给缩略图地址`,
+    );
+  }
+  // 没有 ext、文件名里也没有点：当不了图
+  assert.equal(thumbUrlFor({ filePath: 'C:/work/workspace/README' }), null);
+});
+
+t('thumbUrlFor：结果结构上不可能是会 400 的资源地址', () => {
+  const samples = [
+    { filePath: 'C:/a/b.png', ext: 'png' },
+    { filePath: 'C:/a/b.webp', ext: 'webp' },
+    { fileId: 'sf_1', label: 'b.png', ext: 'png' },
+    { ext: 'gif' },
+  ];
+  for (const file of samples) {
+    const url = thumbUrlFor(file);
+    assert.ok(url === null || url.startsWith('/gw/file/'), `缩略图只能走 /gw/file 或没有，实际 ${url}`);
+    assert.ok(!String(url).includes('/api/resources/'), `缩略图绝不能退回资源地址，实际 ${url}`);
+  }
 });
 
 /* ------------------------------------------------------------------ */

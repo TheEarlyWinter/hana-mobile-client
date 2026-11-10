@@ -254,7 +254,7 @@ function uploadErrorMessage(raw) {
  * 把一个文件传成会话文件，返回它的 fileId。
  * 上传是**必须**的：prompt 帧里没有内联文档通道，模型只能靠 fileId 去读。
  * @param {File|Blob} file
- * @param {{ api: Function, sessionPath: string, name?: string, mimeType?: string }} options
+ * @param {Partial<{ api: Function, sessionPath: string, name?: string, mimeType?: string }>} [options]
  * @returns {Promise<{fileId: string, name: string, mimeType: string, bytes: number}>}
  */
 export async function uploadSessionFile(file, { api, sessionPath, name, mimeType } = {}) {
@@ -435,7 +435,7 @@ function mimeFromPath(p) {
  * 把一条用户消息的内容拆成文字、图片和文件引用。
  * @param {string|Array} content
  * @param {{ fileUrl?: (p:string)=>string|null, resourceUrl?: (id:string)=>string|null }} [opts]
- * @returns {{ text: string, images: Array<object>, files: Array<{fileId:string,label:string,kind:string}> }}
+ * @returns {{ text: string, images: Array<object>, files: Array<{fileId:string,label:string,kind:string}>, references: Array<object> }}
  */
 export function splitUserContent(content, opts = {}) {
   const textParts = [];
@@ -599,6 +599,21 @@ export function formatBytes(n) {
  * 注意：`displayMessage` 只放 `text`，不放 attachments——图片本身已经在 content
  * 块里了，再塞一份路径只会让别的客户端渲染出空壳附件；文件引用由宿主自己展开成
  * 正文里的 `[SessionFile]` 行（历史回放时 attach.js 的 splitUserContent 再抽回来）。
+ *
+ * 形参里 session / inputId / sessionId / sessionPath / feedItemId / feedRevision 都没有
+ * 默认值，不写下面这份 JSDoc 参数块，tsc 会把它们整个漏出形参类型，装配处一传就是多余属性。
+ *
+ * @param {object} [options]
+ * @param {{ sessionId?: string|null, path?: string|null }|null} [options.session]
+ *   当前会话；没显式给 sessionId / sessionPath 时从这里取
+ * @param {string} [options.text]
+ * @param {any[]} [options.attachments] 托盘里的附件（已处理完的那批）
+ * @param {string} [options.inputId] 本机消息 id，回执对账用
+ * @param {string|null} [options.sessionId]
+ * @param {string|null} [options.sessionPath]
+ * @param {string} [options.type] 'steer' 走插话，其余一律当普通 prompt
+ * @param {string} [options.feedItemId]
+ * @param {number} [options.feedRevision]
  */
 export function buildPromptFrame({ session, text = '', attachments = [], inputId, sessionId, sessionPath, type = 'prompt', feedItemId, feedRevision } = {}) {
   const list = (attachments || []).filter(Boolean);

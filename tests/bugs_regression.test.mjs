@@ -185,6 +185,8 @@ btnSend.appendChild(sendLabel);
 await import('../web/app.js');
 
 const S = globalThis.__hana.S;
+/* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+const R = globalThis.__hana.rendererState;
 const streamState = globalThis.__hana.streamState;
 
 let bad = 0;
@@ -316,7 +318,7 @@ await t('缺陷3: tool_start/end 以 toolCallId/id 匹配以支持交错结束',
   };
   globalThis.__hana.handleEvent(ev2);
 
-  const metaBody = S.turn.querySelector('.meta-body');
+  const metaBody = R.turn.querySelector('.meta-body');
   assert.ok(metaBody, '启动 tool 后应该成功初始化 meta-body');
 
   const tools = metaBody.querySelectorAll('.meta-tool');
@@ -370,7 +372,7 @@ await t('缺陷3补充: tool_end 有 callId 找不到对应项时不应错误标
   };
   globalThis.__hana.handleEvent(evA);
 
-  const metaBody = S.turn.querySelector('.meta-body');
+  const metaBody = R.turn.querySelector('.meta-body');
   const tools = metaBody.querySelectorAll('.meta-tool');
   const rowToolA = tools[0];
   assert.equal(rowToolA.classList.contains('done'), false, 'tool A 初始处于运行中');
@@ -420,7 +422,7 @@ await t('缺陷4.1: 切会话时必须清理流式游标（streamState）', asyn
 await t('缺陷4.2: stream_resume 必须解包事件并更新游标', () => {
   S.session = { path: 'path-cur', sessionId: 'sess-cur' };
   streamState.reset();
-  S.streamingRaw = '';
+  R.streamingRaw = '';
   const transcript = getEl('transcript');
   transcript.children = [];
 
@@ -444,7 +446,7 @@ await t('缺陷4.2: stream_resume 必须解包事件并更新游标', () => {
     2,
     `lastSeq 必须根据已实际处理事件更新为 2（当前为 ${streamState.snapshot().lastSeq}）`,
   );
-  assert.ok(S.streamingRaw.includes('Hello World'), `嵌套事件中的 delta 必须被解包处理，当前为 "${S.streamingRaw}"`);
+  assert.ok(R.streamingRaw.includes('Hello World'), `嵌套事件中的 delta 必须被解包处理，当前为 "${R.streamingRaw}"`);
 });
 
 await t('缺陷4.3: 新 stream 独立序列（streamId 变更时 lastSeq 重置）', () => {
@@ -480,7 +482,7 @@ await t('缺陷4.4: stream_resume 重复回放去重（跳过已处理的 seq，
   streamState.reset();
   streamState.beginReplay({ streamId: 's_resume_dedup' });
   streamState.acceptReplay(2); // 客户端之前已经成功处理了 seq: 1 和 seq: 2
-  S.streamingRaw = '已处理';
+  R.streamingRaw = '已处理';
   const transcript = getEl('transcript');
   transcript.children = [];
 
@@ -501,7 +503,7 @@ await t('缺陷4.4: stream_resume 重复回放去重（跳过已处理的 seq，
   globalThis.__hana.handleEvent(resumeMsg);
 
   assert.equal(streamState.snapshot().lastSeq, 3, `lastSeq 必须更新到新处理的 seq 3（当前为 ${streamState.snapshot().lastSeq}）`);
-  assert.equal(S.streamingRaw, '已处理新内容', `重复的 seq: 1 和 seq: 2 必须跳过，不可重复渲染！当前为 "${S.streamingRaw}"`);
+  assert.equal(R.streamingRaw, '已处理新内容', `重复的 seq: 1 和 seq: 2 必须跳过，不可重复渲染！当前为 "${R.streamingRaw}"`);
 });
 
 await t('缺陷4.5: 不可凭空推断 nextSeq 越过未实际处理事件', () => {
@@ -530,7 +532,7 @@ await t('缺陷4.5: 不可凭空推断 nextSeq 越过未实际处理事件', () 
 await t('缺陷4.6: envelope 上的高 seq 不得跳过内部实际事件', () => {
   S.session = { path: 'path-cur', sessionId: 'sess-cur' };
   streamState.reset();
-  S.streamingRaw = '';
+  R.streamingRaw = '';
 
   const resumeMsg = {
     type: 'stream_resume',
@@ -546,7 +548,7 @@ await t('缺陷4.6: envelope 上的高 seq 不得跳过内部实际事件', () =
 
   globalThis.__hana.handleEvent(resumeMsg);
 
-  assert.equal(S.streamingRaw, '甲乙', `envelope seq 不得让内部事件被当成重复而跳过，当前为 "${S.streamingRaw}"`);
+  assert.equal(R.streamingRaw, '甲乙', `envelope seq 不得让内部事件被当成重复而跳过，当前为 "${R.streamingRaw}"`);
   assert.equal(streamState.snapshot().lastSeq, 2, `游标只能按实际消费的 seq 推进到 2，当前为 ${streamState.snapshot().lastSeq}`);
 });
 
@@ -573,7 +575,7 @@ await t('缺陷4.7: abort 带上 snapshot 的 streamId，本地 finish 不清游
 await t('缺陷4.8: 回放先过滤 inner 所属会话，再推进游标', () => {
   S.session = { path: 'path-cur', sessionId: 'sess-cur' };
   streamState.reset();
-  S.streamingRaw = '';
+  R.streamingRaw = '';
 
   const resumeMsg = {
     type: 'stream_resume',
@@ -591,8 +593,8 @@ await t('缺陷4.8: 回放先过滤 inner 所属会话，再推进游标', () =>
 
   globalThis.__hana.handleEvent(resumeMsg);
 
-  assert.ok(!S.streamingRaw.includes('外'), `别的会话的事件不得渲染，当前为 "${S.streamingRaw}"`);
-  assert.ok(S.streamingRaw.includes('内'), `本会话事件必须正常渲染，当前为 "${S.streamingRaw}"`);
+  assert.ok(!R.streamingRaw.includes('外'), `别的会话的事件不得渲染，当前为 "${R.streamingRaw}"`);
+  assert.ok(R.streamingRaw.includes('内'), `本会话事件必须正常渲染，当前为 "${R.streamingRaw}"`);
   assert.equal(streamState.snapshot().lastSeq, 1, `foreign seq 100 不得污染游标，最终应为 1，当前为 ${streamState.snapshot().lastSeq}`);
 });
 

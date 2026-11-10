@@ -40,6 +40,8 @@ h.setFetch(async (url) => {
 
 const hana = await h.loadApp();
 const S = hana.S;
+/* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+const R = hana?.rendererState || globalThis.__hana.rendererState;
 await h.waitFor(() => S.currentAgent, 'boot 完成');
 
 const btnSend = h.getEl('btnSend');
@@ -86,7 +88,7 @@ await t('断线时点停止：保持生成态，重连后补发 abort 才收尾'
   S.ws = closedSocket();
   S.wsReady = false;
   S.reconnectDelay = 20;
-  const turn = S.turn;
+  const turn = R.turn;
   assert.equal(S.busy, true, '夹具：应已进入生成态');
   assert.equal(sendLabel(), '停止', '夹具：生成中按钮应是「停止」');
 
@@ -95,7 +97,7 @@ await t('断线时点停止：保持生成态，重连后补发 abort 才收尾'
   // 1) 没有发出去就不能假装停了
   assert.equal(S.busy, true, 'abort 没发出去时不得清掉本地生成态（按钮还是「停止」）');
   assert.equal(sendLabel(), '停止', `按钮文案必须仍是「停止」，实际 ${sendLabel()}`);
-  assert.ok(S.turn === turn, '本轮消息节点不能被 finishTurn 收掉');
+  assert.ok(R.turn === turn, '本轮消息节点不能被 finishTurn 收掉');
   assert.ok(S.pendingAbort, 'abort 必须记为待补发');
   assert.equal(S.pendingAbort.sessionPath, 'p-1');
   assert.equal(S.pendingAbort.sessionId, 's-1');

@@ -417,6 +417,69 @@ await t('全局 app_event: card-data-changed 分发至 cardBridge 且不误吞�
   assert.equal(S.busy, false, '跨会话普通事件依然必须被严格过滤');
 });
 
+/* ------------------------------------------------------------------ */
+/* 8. I1-1 启动配置失败可见并可重试；I1-3 缺少 WebSocket 能力有明确提示   */
+/* ------------------------------------------------------------------ */
+
+function jsonResponse(body, init = {}) {
+  return {
+    ok: init.ok !== false,
+    status: init.status || 200,
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+  };
+}
+
+async function waitFor(cond, label, timeoutMs = 2000) {
+  const started = Date.now();
+  while (!cond()) {
+    if (Date.now() - started > timeoutMs) throw new Error(`等待超时：${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+await t('I1-1: bootstrap 失败降级启动、错误可见，刷新能重试成功', async () => {
+  let bootstrapOk = false;
+  globalThis.fetch = async (url) => {
+    const path = String(url).split('?')[0];
+    if (path === '/api/web-auth/session') return jsonResponse({ authenticated: true, principal: { id: 'user-1' } });
+    if (path === '/api/web-auth/login') return jsonResponse({ ok: true });
+    if (path === '/api/mobile/bootstrap') {
+      if (!bootstrapOk) return jsonResponse({ error: 'host down' }, { ok: false, status: 500 });
+      return jsonResponse({ agents: [{ id: 'agent-real', name: '小满', isPrimary: true }], agentName: '小满' });
+    }
+    if (path === '/api/sessions') return jsonResponse({ ok: true, sessions: [] });
+    return jsonResponse({});
+  };
+
+  clearFlash();
+  const loggedIn = await globalThis.__hana.loginController.login({ username: 'u', password: 'p' });
+  assert.equal(loggedIn, true, 'bootstrap 失败不得阻断启动');
+  assert.equal(S.boot, null, '降级：配置留空');
+  assert.equal(S.agentName, 'Hana', '降级：用默认署名');
+  assert.match(flashText(), /配置没加载成功/, '失败必须看得见，不能静默用默认值');
+
+  bootstrapOk = true;
+  clearFlash();
+  getEl('btnRefresh').dispatchEvent('click');
+  await waitFor(() => S.boot !== null, '刷新把配置重新拉回来');
+  assert.equal(S.agentName, '小满', '重试成功后要换回真实署名');
+  assert.equal(getEl('agentName').textContent, '小满');
+  assert.match(flashText(), /配置已重新加载/, '重试成功要有反馈');
+});
+
+await t('I1-3: 内核缺少 WebSocket 时给可见错误，不抛未捕获异常', () => {
+  const original = globalThis.WebSocket;
+  try {
+    globalThis.WebSocket = undefined;
+    clearFlash();
+    assert.doesNotThrow(() => globalThis.__hana.connectWS(), '缺能力不能让页面抛未捕获异常');
+    assert.match(flashText(), /WebSocket/, '要说明是内核缺 WebSocket，而不是笼统说连不上');
+  } finally {
+    globalThis.WebSocket = original;
+  }
+});
+
 if (bad > 0) {
   console.error(`\nFAILED (${bad} tests failed)`);
   process.exit(1);

@@ -63,7 +63,7 @@ export function matchWorkspaceRoot(filePath, roots) {
  * 拼工作区同源内容地址。参数一律走 URLSearchParams，空格编码成 %20
  * （表单编码的 + 在宿主侧会被当字面加号）。
  *
- * @param {{mountId: string, agentId?: string, subdir?: string, name: string}} parts
+ * @param {Partial<{mountId: string, agentId?: string, subdir?: string, name: string}>} [parts]
  */
 export function buildWorkspaceContentUrl({ mountId, agentId = '', subdir = '', name } = {}) {
   if (typeof mountId !== 'string' || !mountId.trim()) return null;

@@ -39,6 +39,8 @@ const API_DOCUMENT_TYPES = new Set(['text/html', 'application/xhtml+xml', 'image
 /** 流式响应类型：压了会积压，直接排除（不是靠“看响应有多快”猜）。 */
 const STREAMING_MIME = new Set(['text/event-stream', 'application/x-ndjson']);
 const GZIP_MIME = new Set(['application/json', 'application/javascript']);
+/** 旁路收集响应体的上限（尾部快照用）。超了就不存：宁可下一次慢，也不把内存当仓库。 */
+const BODY_COLLECT_MAX_BYTES = 2 * 1024 * 1024;
 
 function mimeOf(headers = {}) {
   const raw = Array.isArray(headers['content-type']) ? headers['content-type'][0] : headers['content-type'];
@@ -246,9 +248,12 @@ function hardenApiDocumentHeaders(upstreamHeadersValue) {
 }
 
 /**
- * @param {{ isApiPath: (rawUrl: string) => boolean }} deps 路由层的 API 前缀判定（与 server.mjs 共用一份）
+ * @param {{ isApiPath: (rawUrl: string) => boolean, shouldCollectBody?: Function, onResponseBody?: Function }} deps
+ *   isApiPath：路由层的 API 前缀判定（与 server.mjs 共用一份）
+ *   shouldCollectBody(req, status, headers) → boolean：要不要把这段响应体也留一份（尾部快照用）
+ *   onResponseBody(req, res, status, headers, body)：收完时回调；body 可能是 null（超限/中断）
  */
-export function createHttpProxy({ isApiPath }) {
+export function createHttpProxy({ isApiPath, shouldCollectBody = null, onResponseBody = null }) {
   function isApiDocumentResponse(req, headers) {
     if (!isApiPath(req.url || '')) return false;
     return API_DOCUMENT_TYPES.has(mimeOf(headers));
@@ -360,6 +365,41 @@ export function createHttpProxy({ isApiPath }) {
         upstreamRes.on('end', () => {
           res.upstreamDoneAt = process.hrtime.bigint();
         });
+
+        // 尾部快照：转给客户端的同时留一份明文原体（压缩前）。
+        // 只给明确点名的路径留（shouldCollectBody 返回 true），而且是旁路——
+        // 收集失败、超限、回调抛错都不影响已经写好头的响应。
+        if (typeof shouldCollectBody === 'function') {
+          let collect = null;
+          try {
+            if (shouldCollectBody(req, st, responseHeaders)) {
+              collect = { chunks: [], bytes: 0, overflow: false };
+            }
+          } catch {
+            collect = null;
+          }
+          if (collect) {
+            upstreamRes.on('data', (chunk) => {
+              if (collect.overflow) return;
+              collect.bytes += chunk.length;
+              if (collect.bytes > BODY_COLLECT_MAX_BYTES) {
+                // 超限就不再攒，后面 in 'end' 直接报 null 给回调。
+                collect.overflow = true;
+                collect.chunks = [];
+                return;
+              }
+              collect.chunks.push(chunk);
+            });
+            upstreamRes.on('end', () => {
+              const body = collect.overflow ? null : Buffer.concat(collect.chunks);
+              try {
+                onResponseBody?.(req, res, st, responseHeaders, body);
+              } catch {
+                // 缓存层自己出错不能影响请求
+              }
+            });
+          }
+        }
 
         if (!compress) {
           upstreamRes.pipe(res);

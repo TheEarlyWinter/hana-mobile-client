@@ -61,6 +61,10 @@ const FALLBACK_KEYS = [
  *  - `web_search` 既是 web 又是 search：web 必须排在 search 前面，否则搜索类工具的
  *    取值键会变成 pattern，而 web 工具的参数叫 query，整行就只剩一个动词；
  *  - `show_card` 里的 show 不要单独当规则（`show_file` 是读），只认 card 这个词。
+ *
+ * 每一项是 [kind, 判词函数] 的定长二元组；不写这行注解时 tsc 会把元素推成
+ * `string | ((t: Set<string>) => boolean)` 的联合，下面 kindOf 里就调不动 test(tokens)。
+ * @type {Array<[string, (tokens: Set<string>) => boolean]>}
  */
 const KIND_RULES = [
   ['subagent', (t) => t.has('subagent') || (t.has('sub') && t.has('agent'))

@@ -11,6 +11,9 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WEB_ROOT } from './config.mjs';
+// 弱比较规则（`W/` 前缀、逗号列表、`*`）只能有一份实现：这里再写一遍，迟早与它分叉。
+// 放独立小模块而不是从头像模块借：静态资源不该把头像抓取链路拖进自己的依赖图。
+import { etagMatches } from './etag.mjs';
 import { MIME, isInsideRoot, pathKey, streamFileResponse } from './file-utils.mjs';
 import { ASSET_NAME, DIST_DIRNAME, MANIFEST_NAME, readDistManifest } from './web-build.mjs';
 
@@ -93,7 +96,9 @@ export async function serveStatic(req, res) {
   try {
     pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   } catch {
-    res.writeHead(400).end('bad url');
+    // 解码不了的 URL 是客户端给错了，不是「这个地址暂时没内容」：但同样不能被缓存，
+    // 走 sendPlain 统一带 no-store。
+    sendPlain(res, 400, 'bad url');
     return;
   }
 
@@ -232,8 +237,13 @@ async function sendFile(filePath, res, req, knownStat) {
   // 不能让「源文件字节没变」把一个指向已删除产物的 304 发回去。
   const meta = `${stat.size.toString(16)}-${stat.mtimeMs.toString(36)}`;
   const etag = `W/"${isIndex && manifest ? `${meta}-${manifest.hash}` : meta}"`;
-  if (req.headers['if-none-match'] === etag) {
-    const headers = { etag };
+  // 304 也是这个 URL 的一份响应：中间层会用它的头更新这条缓存。这里必须和 200
+  // 算同一份策略，否则「条件请求命中」会把 immutable 降成可协商、把 no-store 抹掉。
+  const cacheControl = cacheControlFor({ isDist, ext, base: path.basename(filePath), manifest });
+  // 我们只发弱 etag，客户端回的却可能是 `W/"x"`、`"x"`、逗号列表或 `*`：
+  // 逐字比较等于把这些一律当成「不命中」，每次都重传整个文件。
+  if (etagMatches(req.headers['if-none-match'], etag)) {
+    const headers = { etag, 'cache-control': cacheControl };
     if (isHtml) headers['content-security-policy'] = APP_HTML_CSP;
     res.writeHead(304, headers).end();
     return;
@@ -248,7 +258,7 @@ async function sendFile(filePath, res, req, knownStat) {
   const headers = {
     'content-type': MIME[ext] || 'application/octet-stream',
     'content-length': body ? body.length : stat.size,
-    'cache-control': cacheControlFor({ isDist, ext, base: path.basename(filePath), manifest }),
+    'cache-control': cacheControl,
     etag,
   };
   if (isHtml) headers['content-security-policy'] = APP_HTML_CSP;

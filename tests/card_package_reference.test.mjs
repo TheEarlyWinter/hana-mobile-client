@@ -24,7 +24,7 @@ async function t(name, fn) {
   }
 }
 
-const PKG_DIR = 'C:\\Users\\example\\.hanako\\session-files\\s1\\c_pkg';
+const PKG_DIR = 'C:\\Users\\WIT\\.hanako\\session-files\\s1\\c_pkg';
 const SNAPSHOT = { sessionId: 's1', sessionPath: 'C:/s1.jsonl' };
 
 function record(overrides = {}) {

@@ -147,7 +147,7 @@ async function startLiveTurn(socket, { streamId, text }) {
   });
   await h.settle(6);
   assert.ok(hana.S.busy === true, '夹具：真实 status/text_delta 应进入生成态');
-  assert.ok(Boolean(hana.S.turn), '夹具：真实 text_delta 应开出一轮');
+  assert.ok(Boolean(R.turn), '夹具：真实 text_delta 应开出一轮');
   assert.ok(transcriptText().includes(text), '夹具：实时正文应上屏');
 }
 
@@ -212,8 +212,11 @@ async function t(name, fn) {
 }
 
 let hana = null;
+let R = null;
 try {
   hana = await h.loadApp();
+  /* 渲染进度袋：D2 起测试直接读它，S 上不再转发这些字段。 */
+  R = hana.rendererState;
   const S = hana.S;
   await h.waitFor(() => S.currentAgent, 'boot 完成');
 
@@ -257,7 +260,7 @@ try {
     await h.delay(600);
     await h.settle(6);
     assert.ok(S.busy === true, '窗口未到期前不能清 busy');
-    assert.ok(Boolean(S.turn), '窗口未到期前不能收掉活动轮');
+    assert.ok(Boolean(R.turn), '窗口未到期前不能收掉活动轮');
     assert.equal(historyCount(), beforeGet, '窗口未到期前不得发历史 GET');
 
     // 窗口到期：放行一次历史补拉 → 历史比屏上更完整 → 收尾换屏。
@@ -265,7 +268,7 @@ try {
     await h.waitFor(() => S.busy === false, '对账收尾应清 busy', 3000);
     await h.waitFor(() => transcriptText().includes('RECON_A_DONE'), '完整回复应上屏', 2000);
 
-    assert.ok(!S.turn, '对账收尾后不能留着活动轮');
+    assert.ok(!R.turn, '对账收尾后不能留着活动轮');
     assert.equal(countIn(transcriptText(), 'RECON_A_PART'), 1, '半截实时正文必须被完整历史替换，不能各留一份');
     assert.equal(notifyLog.length, beforeNotify, '对账收尾不是宿主结束事件，不应走结束通知');
     // 收尾不再排第二次补拉：历史就是这次对账自己取回来的那份。
@@ -314,7 +317,7 @@ try {
     await h.delay(AFTER_WINDOW_MS);
     await h.settle(8);
     assert.equal(S.busy, true, '窗口内来过事件时不能清 busy');
-    assert.ok(Boolean(S.turn), '窗口内来过事件时不能收掉活动轮');
+    assert.ok(Boolean(R.turn), '窗口内来过事件时不能收掉活动轮');
     assert.equal(historyCount(), beforeGet, '窗口内来过事件时不得发历史 GET');
     assert.ok(transcriptText().includes('RECON_B_PART'), '屏上实时正文不能被历史替换');
     assert.ok(!transcriptText().includes('RECON_B_DONE'), '历史内容不得混进正在生成的这一轮');
@@ -356,7 +359,7 @@ try {
     await h.waitFor(() => S.busy === false, 'runtime=false 必须走既有路径立即收尾', 1200);
     await h.waitFor(() => historyCount() === beforeGet + 1, '权威 idle 的补拉', 2500);
     await h.waitFor(() => transcriptText().includes('RECON_C_DONE'), '完整历史应上屏', 2000);
-    assert.ok(!S.turn, '权威收尾后不应留着活动轮');
+    assert.ok(!R.turn, '权威收尾后不应留着活动轮');
     assert.ok(notifyLog.length === beforeNotify + 1, '权威 idle 是真实结束事件，仍应走一次结束通知判定');
 
     // 窗口应该已经被这条 resume 事件取消：再等一个窗口也不会多出 GET。
@@ -380,7 +383,7 @@ try {
     // 比实时正文长，但完全不包含它——必须判成「没有新内容」。
     historyFixture = historyWith('RECON_D_PREVIOUS_REPLY 这是上一轮的完整回复，比实时正文更长但不相干');
     const beforeGet = historyCount();
-    const turnBefore = S.turn;
+    const turnBefore = R.turn;
 
     const fresh = await resumeForeground();
     fresh.push({
@@ -397,7 +400,7 @@ try {
     await h.settle(8);
 
     assert.equal(S.busy, true, '历史没有新内容时不能清 busy');
-    assert.ok(S.turn === turnBefore, '活动轮必须还是原来那一轮');
+    assert.ok(R.turn === turnBefore, '活动轮必须还是原来那一轮');
     assert.ok(transcriptText().includes('RECON_D_PART'), '屏上实时正文必须保留');
     assert.ok(transcriptText().includes('RECON_BASELINE_REPLY'), '整页历史不能被换掉');
     assert.ok(!transcriptText().includes('RECON_D_PREVIOUS_REPLY'), '旧回复不能顶掉正在生成的这一轮');

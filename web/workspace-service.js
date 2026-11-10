@@ -400,6 +400,9 @@ export function createWorkspaceService({ fetchImpl, timeoutMs = 15000 } = {}) {
    * 读取工作室真实工作区根列表。
    * 数据源是 GET /api/studio/workspaces（files.read），不是 bootstrap 推断。
    * 响应里的 mountId 才是工作区根身份；这里不构造任何文件系统路径。
+   *
+   * 返回值是一个信封，不是数组：装配层要取 `workspaces` 才能拿到具名根。
+   * @returns {Promise<{ ok: boolean, studioId: any, localDeviceName: string, workspaces: object[] }>}
    */
   async function listRoots() {
     const data = await request('/api/studio/workspaces');

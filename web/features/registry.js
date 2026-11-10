@@ -118,7 +118,7 @@ export function createFeatureRegistry(options = {}) {
    * 按依赖顺序启动全部特性。
    *
    * @param {object} baseContext 所有特性共享的上下文（状态、DOM 取值器、请求函数等）。
-   * @returns {{ order: string[], dispose: () => void }}
+   * @returns {{ order: string[], get: (name: string) => any, dispose: () => void }}
    */
   function start(baseContext = {}) {
     if (started.length) {
